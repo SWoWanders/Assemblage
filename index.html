@@ -437,6 +437,18 @@ function compilePrompt(plan, L, W, H, guided){
   const body=parts.join(' ');
   return guided ? 'Use the input image only as a rough layout guide: each soft coloured shape marks where one object goes and roughly how big it is, and the flat backdrop marks the horizon. Replace every shape with the real object described below and replace the backdrop with the real setting, so the result is a natural photograph with no visible shapes. '+body : body;
 }
+
+// Short prompt for fast free models: fewer words, each colour right beside its object, positions up front.
+function compilePromptShort(plan, L, W, H){
+  const s=plan.setting, O=plan.objects;
+  const where=o=>{ const mine=L.inst.filter(I=>I.g===O.indexOf(o)); if(!mine.length) return ''; const x=mine.reduce((a,I)=>a+I.x,0)/mine.length/W; return mine[0].sky?'in the sky':mine[0].flying?'in the air':x<0.36?'on the left':x>0.64?'on the right':'in the centre'; };
+  const parts=O.map(o=>`${describe(o)} ${where(o)}`.trim());
+  const weather={fog:'thick fog',rain:'rain',snow:'falling snow',haze:'haze'}[s.weather]||'';
+  const time={night:'at night',sunset:'at sunset',sunrise:'at sunrise',overcast:'overcast'}[s.time]||'';
+  const place=s.query? s.query.replace(/\b(fog|foggy|rain|rainy|snow|snowy)\b/g,'').replace(/\s+/g,' ').trim() : '';
+  const rel=(plan.relations||[]).map(r=>`${O[r.a].name}${O[r.a].count>1?'s':''} ${RELWORD[r.type]} the ${O[r.b].name}`);
+  return ['Real photo: '+parts.join(', ')+'.', rel.length? rel.join(', ')+'.':'', [place, weather, time].filter(Boolean).join(', ')+'.', `Exactly as described, correct colours, sharp, natural light, no text.`].filter(x=>x&&x!=='.').join(' ');
+}
 function repairInstruction(plan, fails){
   const O=plan.objects; const fx=[];
   for(const c of fails){
@@ -455,7 +467,7 @@ function repairInstruction(plan, fails){
   return 'Edit this photo. '+fx.slice(0,3).join(' ')+' Keep everything else exactly the same: same composition, camera and lighting.';
 }
 
-if(typeof module!=='undefined') module.exports={parsePrompt,normalizePlan,buildChecklist,solveLayout,verifyLayout,singular,COLORS,MATERIALS,compilePrompt,repairInstruction,aspectOf};
+if(typeof module!=='undefined') module.exports={parsePrompt,normalizePlan,buildChecklist,solveLayout,verifyLayout,singular,COLORS,MATERIALS,compilePrompt,compilePromptShort,repairInstruction,aspectOf};
 </script>
 
 <!-- ===================== APP (browser) ===================== -->
@@ -649,7 +661,7 @@ function clipGroups(plan, checklist){
     if(c.kind==='setting'){ const pool=['a beach','a forest','a city street','a living room','an office','a desert','a kitchen','a mountain','outer space','a field']; return {target:`a photo taken in ${/^[aeiou]/.test(s.query)?'an':'a'} ${s.query}`, others:pool.filter(x=>!x.includes(s.query)&&!s.query.includes(x.replace(/^an? /,''))).map(x=>'a photo taken in '+x), top:2}; }
     if(c.kind==='weather'){ const m={fog:'a foggy scene',rain:'a rainy scene',snow:'a snowy scene',haze:'a hazy scene'}; return {target:m[s.weather], others:['a clear sunny scene',...Object.values(m).filter(x=>x!==m[s.weather])], top:1}; }
     if(c.kind==='time'){ const m={night:'a photo taken at night',sunset:'a photo taken at sunset',sunrise:'a photo taken at sunrise'}; return {target:m[s.time], others:['a photo taken in the middle of the day',...Object.values(m).filter(x=>x!==m[s.time])], top:1}; }
-    if(c.kind==='realism'){ return {target:'a real photograph', others:['a drawing','a cartoon','a painting','a 3D render','a diagram','a collage'], top:1}; }
+    if(c.kind==='realism'){ return {target:'a real photograph', others:['a drawing','a cartoon','a painting','a 3D render','a diagram','a collage'], top:2}; }
     return null; // count, relation: not judged on-device
   });
 }
@@ -728,7 +740,7 @@ async function run(){
     const L=solveLayout(plan,aspects,W,H,scene,()=>0.5);
     const guide=drawGuide(plan,L,scene); $('guideView').getContext('2d').drawImage(guide,0,0);
     const guideURL=guide.toDataURL('image/jpeg',0.9);
-    const pGuided=compilePrompt(plan,L,W,H,true), pText=compilePrompt(plan,L,W,H,false);
+    const pGuided=compilePrompt(plan,L,W,H,true), pText= EXTERNAL[cfg.model] ? compilePromptShort(plan,L,W,H) : compilePrompt(plan,L,W,H,false);
     $('promptView').textContent=pText;
     step(1,'done',L.inst.length+' objects placed');
     // 3 render variations in parallel: guided ones keep the layout, a text-only one is a safety net
