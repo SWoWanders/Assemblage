@@ -1,0 +1,890 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Assemblage — images from real photographs</title>
+<meta name="theme-color" content="#14110f">
+<style>
+:root{--bg:#14110f;--panel:#1e1a17;--line:#3a322b;--ink:#efe6da;--dim:#a89b8b;--acc:#e8a33d;--ok:#7fc27a;--bad:#e2685b;--r:14px}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+header{padding:16px 16px 6px;display:flex;align-items:center;gap:10px}
+h1{font:600 22px/1 Georgia,"Times New Roman",serif;letter-spacing:.5px;margin:0}
+h1 small{display:block;font:12px/1.4 system-ui,sans-serif;color:var(--dim);letter-spacing:0;margin-top:4px}
+.gear{margin-left:auto;background:none;border:1px solid var(--line);color:var(--ink);border-radius:10px;padding:8px 10px;font-size:16px}
+main{max-width:900px;margin:0 auto;padding:0 12px 80px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:12px;margin:10px 0}
+textarea{width:100%;min-height:78px;background:#0f0d0b;color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:10px;font-family:inherit;font-size:16px;line-height:1.4;resize:vertical}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+button.main{flex:1;min-height:48px;background:var(--acc);color:#1b1206;border:0;border-radius:12px;font-weight:700;font-size:16px}
+button.main:disabled{opacity:.5}
+button.sec{min-height:40px;background:#2a241f;color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:0 12px}
+.chips{display:flex;gap:6px;overflow-x:auto;padding:8px 0 2px;scrollbar-width:none}
+.chip{flex:none;font-size:13px;padding:6px 10px;border-radius:99px;background:#2a241f;border:1px solid var(--line);color:var(--dim)}
+#stage{position:relative;border-radius:var(--r);overflow:hidden;background:#000;border:1px solid var(--line)}
+#out{display:block;width:100%;height:auto;aspect-ratio:3/2}
+#stage .empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--dim);font-size:14px;text-align:center;padding:20px}
+.steps{list-style:none;margin:0;padding:0;font-size:14px}
+.steps li{padding:3px 0;color:var(--dim)}
+.steps li.run{color:var(--acc)} .steps li.done{color:var(--ink)} .steps li.fail{color:var(--bad)}
+.steps li::before{content:"○ ";} .steps li.run::before{content:"◐ "} .steps li.done::before{content:"● "} .steps li.fail::before{content:"✕ "}
+#thumbs{display:flex;gap:8px;overflow-x:auto;padding-top:8px}
+#thumbs canvas{width:96px;height:64px;border-radius:8px;border:2px solid transparent;flex:none}
+#thumbs canvas.sel{border-color:var(--acc)}
+.check{display:flex;gap:8px;font-size:14px;padding:3px 0}
+.check b{width:18px;flex:none;text-align:center}
+.yes b{color:var(--ok)} .no b{color:var(--bad)} .unk b{color:var(--dim)}
+.score{font:600 28px/1 Georgia,serif}
+details summary{cursor:pointer;color:var(--dim);font-size:14px}
+pre{white-space:pre-wrap;font-size:12px;color:var(--dim);margin:6px 0 0}
+.credits{font-size:12px;color:var(--dim)} .credits a{color:var(--dim)}
+#toasts{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);display:flex;flex-direction:column;gap:6px;z-index:9;width:min(92vw,520px)}
+.toast{background:#2a241f;border:1px solid var(--line);border-left:4px solid var(--acc);padding:10px 12px;border-radius:10px;font-size:14px;box-shadow:0 6px 20px #0008}
+.toast.err{border-left-color:var(--bad)} .toast.ok{border-left-color:var(--ok)}
+dialog{background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:var(--r);width:min(94vw,520px)}
+dialog label{display:block;margin:10px 0 4px;font-size:14px}
+dialog input[type=text],dialog input[type=url]{width:100%;padding:10px;background:#0f0d0b;color:var(--ink);border:1px solid var(--line);border-radius:8px;font-size:15px}
+.hint{font-size:12px;color:var(--dim)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media(min-width:760px){.cols{display:grid;grid-template-columns:1fr 1fr;gap:10px}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Assemblage<small>Pictures built from real photographs, not generated pixels</small></h1>
+  <button class="gear" id="gearBtn" aria-label="Settings">⚙︎</button>
+</header>
+<main>
+  <div class="card">
+    <textarea id="prompt" placeholder="Describe a picture… e.g. two red umbrellas left of a yellow bicycle in fog"></textarea>
+    <div class="chips" id="examples"></div>
+    <div class="row" style="margin-top:8px">
+      <button class="main" id="go">Assemble</button>
+      <button class="sec" id="dl" disabled>Save</button>
+    </div>
+  </div>
+
+  <div id="stage"><canvas id="out" width="1024" height="683"></canvas><div class="empty" id="empty">Your picture appears here.<br>Built from public-domain &amp; Creative Commons photos.</div></div>
+  <div id="thumbs"></div>
+
+  <div class="cols">
+    <div class="card">
+      <div class="row" style="justify-content:space-between"><strong>Prompt match</strong><span class="score" id="score">–</span></div>
+      <div id="checks" class="hint">The checklist from your prompt shows here.</div>
+    </div>
+    <div class="card">
+      <strong>Progress</strong>
+      <ul class="steps" id="steps"></ul>
+    </div>
+  </div>
+
+  <div class="card">
+    <details><summary>Scene plan</summary><pre id="planView">–</pre></details>
+  </div>
+  <div class="card credits" id="credits">Image credits appear here.</div>
+</main>
+<div id="toasts"></div>
+
+<dialog id="settings">
+  <form method="dialog">
+    <strong>Settings</strong>
+    <label for="wurl">Worker URL (optional)</label>
+    <input type="url" id="wurl" placeholder="https://assemblage.yourname.workers.dev">
+    <div class="hint">With the Worker: smarter planning, vision checks and the polish pass (Cloudflare Workers AI). Without it the app still works using its built-in parser.</div>
+    <div class="grid2">
+      <div><label for="nvar">Variations</label><input type="range" id="nvar" min="2" max="6" value="4"><span class="hint" id="nvarV">4</span></div>
+      <div><label for="pstr">Polish strength</label><input type="range" id="pstr" min="10" max="50" value="28"><span class="hint" id="pstrV">0.28</span></div>
+    </div>
+    <label><input type="checkbox" id="useVision" checked> Vision checks (Worker)</label>
+    <label><input type="checkbox" id="usePolish" checked> AI polish pass (Worker)</label>
+    <label><input type="checkbox" id="hdBg"> HD backgrounds (bigger download)</label>
+    <div class="row" style="margin-top:12px"><button class="sec" id="testW" type="button">Test Worker</button><button class="sec" id="clearLib" type="button">Clear learned library</button><span style="flex:1"></span><button class="sec" value="close">Done</button></div>
+  </form>
+</dialog>
+
+<!-- ===================== CORE (pure logic, no DOM — tested in Node) ===================== -->
+<script id="core">
+const COLORS = {red:[196,32,38],crimson:[170,20,40],scarlet:[220,40,20],maroon:[110,20,30],orange:[235,120,30],yellow:[240,200,30],green:[50,140,60],lime:[150,210,50],olive:[110,120,40],mint:[150,220,180],teal:[20,128,128],turquoise:[40,200,190],cyan:[40,200,230],blue:[35,80,200],navy:[20,30,90],purple:[110,40,150],violet:[130,70,200],lavender:[180,160,220],magenta:[210,40,160],pink:[240,130,170],brown:[110,70,40],tan:[200,160,110],beige:[220,200,165],cream:[240,230,200],black:[18,18,20],white:[245,245,242],grey:[128,128,128],gray:[128,128,128]};
+const MATERIALS = {glass:'glass',glassy:'glass',crystal:'glass',transparent:'glass',ice:'ice',icy:'ice',frozen:'ice',gold:'gold',golden:'gold',brass:'gold',bronze:'bronze',copper:'bronze',silver:'silver',chrome:'silver',metal:'metal',metallic:'metal',steel:'metal',iron:'metal',robotic:'metal',wooden:'wood',wood:'wood',stone:'stone',rock:'stone',granite:'stone',marble:'marble',neon:'neon',glowing:'neon',luminous:'neon',paper:'paper',origami:'paper'};
+const NUMS = {a:1,an:1,one:1,single:1,two:2,pair:2,couple:2,three:3,four:4,five:5,six:6,seven:7,eight:8,several:3,few:3,many:5,some:3};
+const SIZES = {person:1.72,man:1.78,woman:1.65,child:1.15,boy:1.3,girl:1.3,baby:0.6,dog:0.6,puppy:0.35,cat:0.3,kitten:0.2,horse:1.6,pony:1.1,cow:1.5,sheep:0.9,goat:0.8,pig:0.8,deer:1.2,moose:2,bear:1.3,wolf:0.8,fox:0.45,rabbit:0.25,squirrel:0.2,owl:0.45,bird:0.2,eagle:0.8,duck:0.4,goose:0.6,swan:0.9,chicken:0.45,penguin:0.7,elephant:3,giraffe:5,lion:1.1,tiger:1.0,zebra:1.4,camel:2,whale:4,dolphin:1.2,shark:1.5,fish:0.3,turtle:0.4,frog:0.1,snake:0.3,dragon:6,dinosaur:5,unicorn:1.6,robot:1.8,car:1.5,truck:3,bus:3.2,bicycle:1.05,bike:1.05,motorcycle:1.2,tractor:2.8,train:4,boat:2.5,ship:20,sailboat:8,canoe:0.6,airplane:12,plane:12,helicopter:4,balloon:0.4,'hot air balloon':20,kite:0.8,umbrella:1.0,tree:9,'palm tree':8,bush:1.2,flower:0.4,sunflower:1.6,rock:0.8,boulder:2,house:7,cabin:5,barn:8,castle:30,church:20,tower:40,lighthouse:22,windmill:15,building:25,skyscraper:150,bridge:20,statue:3,fountain:2.5,bench:0.9,chair:0.9,armchair:1.0,sofa:0.9,couch:0.9,table:0.75,desk:0.75,lamp:1.6,'street lamp':5,'fire hydrant':0.8,mailbox:1.1,piano:1.4,guitar:1.0,violin:0.6,teapot:0.18,cup:0.1,mug:0.1,bottle:0.3,vase:0.35,book:0.24,clock:0.4,'grandfather clock':2,television:0.6,computer:0.5,laptop:0.25,phone:0.15,typewriter:0.25,camera:0.12,suitcase:0.7,backpack:0.5,hat:0.15,shoe:0.12,apple:0.08,banana:0.2,cake:0.15,pizza:0.04,pumpkin:0.35,candle:0.2,lantern:0.4,crown:0.15,sword:1.0,skull:0.2,mushroom:0.15,cactus:2,'teddy bear':0.4,doll:0.4,snowman:1.6,astronaut:1.8,knight:1.8,moon:1,sun:1,planet:1,cloud:1,ufo:6,rocket:30,streetcar:3.4,tram:3.4};
+const SKY = new Set(['moon','sun','planet','cloud','saturn','jupiter','galaxy','nebula','rainbow','aurora']);
+const FLYERS = new Set(['bird','eagle','airplane','plane','helicopter','balloon','hot air balloon','kite','ufo','butterfly','bat','drone','dragon']);
+const SETTINGS = ['forest','woods','jungle','rainforest','cathedral','church','beach','coast','shore','city','street','alley','downtown','desert','dunes','field','meadow','prairie','farm','countryside','mountains','mountain','hills','valley','canyon','lake','river','ocean','sea','harbour','harbor','port','pier','room','kitchen','library','bedroom','living room','office','studio','classroom','museum','gallery','warehouse','factory','garage','hall','castle','palace','park','garden','snowfield','tundra','glacier','cave','swamp','marsh','village','town','market','plaza','square','rooftop','parking lot','highway','road','bridge','train station','station','subway','airport','space','outer space','underwater','seabed','reef','moon surface','mars','ruins','temple','courtyard','arena','stadium','theatre','theater','diner','cafe','restaurant','bar','attic','basement','greenhouse','orchard','vineyard','island','waterfall'];
+const INDOOR = new Set(['cathedral','church','room','kitchen','library','bedroom','living room','office','studio','classroom','museum','gallery','warehouse','factory','garage','hall','palace','cave','train station','station','subway','airport','theatre','theater','diner','cafe','restaurant','bar','attic','basement','greenhouse','temple','arena']);
+const TIME_WORDS = {night:'night',midnight:'night',nighttime:'night',moonlit:'night',evening:'sunset',sunset:'sunset',dusk:'sunset','golden hour':'sunset',twilight:'sunset',sunrise:'sunrise',dawn:'sunrise',morning:'sunrise',noon:'day',midday:'day',daytime:'day',sunny:'day',overcast:'overcast',cloudy:'overcast',grey:'',gloomy:'overcast'};
+const WEATHER_WORDS = {fog:'fog',foggy:'fog',mist:'fog',misty:'fog',haze:'haze',hazy:'haze',rain:'rain',rainy:'rain',raining:'rain',storm:'rain',stormy:'rain',snow:'snow',snowy:'snow',snowing:'snow',blizzard:'snow',winter:'snow'};
+const REL_WORDS = [['to the left of','left_of'],['left of','left_of'],['to the right of','right_of'],['right of','right_of'],['in front of','in_front_of'],['behind','behind'],['on top of','on'],['sitting on','on'],['standing on','on'],['on','on'],['under','under'],['beneath','under'],['below','under'],['above','above'],['over','above'],['next to','next_to'],['beside','next_to'],['near','next_to'],['with','next_to'],['and','next_to']];
+const IRREG = {people:'person',men:'man',women:'woman',children:'child',geese:'goose',mice:'mouse',feet:'foot',teeth:'tooth',sheep:'sheep',fish:'fish',deer:'deer',moose:'moose',wolves:'wolf',knives:'knife',leaves:'leaf',shelves:'shelf',buses:'bus',boxes:'box',foxes:'fox',dresses:'dress',glasses:'glass',benches:'bench',churches:'church',torches:'torch',cacti:'cactus',ponies:'pony',puppies:'puppy',kitties:'kitty',butterflies:'butterfly',cherries:'cherry',strawberries:'strawberry',bodies:'body'};
+const FILLER = /\b((a |an )?(close-up |closeup |wide )?(photo|photograph|picture|image|shot|render|rendering|painting) of|realistic|photorealistic|hyperrealistic|highly detailed|detailed|ultra|hd|4k|8k|beautiful|stunning|cinematic)\b/g;
+
+function singular(w){ if(IRREG[w]) return IRREG[w]; if(/ies$/.test(w)&&w.length>4) return w.slice(0,-3)+'y'; if(/(ss|us|is)$/.test(w)) return w; if(/s$/.test(w)&&w.length>3) return w.slice(0,-1); return w; }
+function sizeOf(name){ if(SIZES[name]!=null) return SIZES[name]; const last=name.split(' ').pop(); return SIZES[last]!=null?SIZES[last]:1.0; }
+
+// ---------- Built-in prompt parser (no AI) ----------
+function parsePrompt(raw){
+  let s = ' '+String(raw||'').toLowerCase().replace(/[“”"]/g,'').replace(/\s+/g,' ')+' ';
+  const setting = {query:'',kind:'outdoor',time:'day',weather:'clear',tags:[]};
+  for(const [w,t] of Object.entries(TIME_WORDS)){ const re=new RegExp('\\b'+w+'\\b'); if(t&&re.test(s)){ setting.time=t; s=s.replace(new RegExp('\\b(at |during |in the )?'+w+'\\b','g'),' '); } }
+  for(const [w,t] of Object.entries(WEATHER_WORDS)){ const re=new RegExp('\\b'+w+'\\b'); if(re.test(s)){ setting.weather=t; s=s.replace(new RegExp('\\b(in |in the |during )?(the )?'+w+'\\b','g'),' '); } }
+  s = s.replace(FILLER,' ').replace(/\s+/g,' ');
+  // setting: phrase after in/inside/at/through/across that contains a known setting word
+  const setRe = /\b(?:in|inside|at|through|across|within|on)\s+(?:a |an |the )?((?:[a-z']+ ){0,3}?(?:[a-z']+))(?=\s*(?:,|\.|$| with | while | during | and ))/g;
+  let m, best=null;
+  while((m=setRe.exec(s))){ const phrase=m[1].trim(); const words=phrase.split(' '); const hit=SETTINGS.find(k=>phrase.endsWith(k)||words.includes(k)); if(hit){ best={phrase,hit,idx:m.index,len:m[0].length}; } }
+  if(!best){ // bare setting word anywhere, e.g. "forest scene with a deer"
+    for(const k of SETTINGS){ const re=new RegExp('\\b'+k+'\\b'); const mm=re.exec(s); if(mm && !(k in SIZES)){ best={phrase:k,hit:k,idx:mm.index,len:k.length}; break; } }
+  }
+  if(best){
+    setting.query = best.phrase.replace(/^(a|an|the) /,'');
+    setting.kind = /space|outer space|galaxy/.test(best.hit)?'space':/underwater|seabed|reef/.test(best.hit)?'underwater':INDOOR.has(best.hit)?'indoor':'outdoor';
+    setting.tags = [best.hit];
+    s = s.slice(0,best.idx)+' , '+s.slice(best.idx+best.len);
+  }
+  s = s.replace(/\bscene\b/g,' ');
+  // split into object chunks with relations between consecutive chunks
+  const tokens = [];
+  let rest = s.replace(/[.;]/g,',');
+  const relAlt = REL_WORDS.map(r=>r[0].replace(/ /g,'\\s+')).join('|');
+  const splitRe = new RegExp('\\s(?:'+relAlt+')\\s|,','g');
+  let last=0, mm2;
+  while((mm2=splitRe.exec(rest))){ tokens.push({text:rest.slice(last,mm2.index),rel:mm2[0].trim()}); last=mm2.index+mm2[0].length; }
+  tokens.push({text:rest.slice(last),rel:null});
+  const objects=[], relations=[];
+  let prevIdx=null, prevRel=null;
+  for(const t of tokens){
+    const o = parseChunk(t.text);
+    if(o){
+      objects.push(o);
+      const idx=objects.length-1;
+      if(prevIdx!=null && prevRel){ const rt=(REL_WORDS.find(r=>r[0]===prevRel.replace(/\s+/g,' '))||[])[1]; if(rt) relations.push({a:prevIdx,b:idx,type:rt}); }
+      prevIdx=idx;
+    }
+    prevRel = t.rel && t.rel!==',' ? t.rel : (t.rel===','?null:prevRel);
+  }
+  return {setting, objects:objects.slice(0,6), relations:relations.filter(r=>r.a<6&&r.b<6), main:0, source:'parser'};
+}
+function parseChunk(text){
+  let words = text.replace(/[^a-z' -]/g,' ').split(/\s+/).filter(Boolean);
+  if(!words.length) return null;
+  let count=1, color=null, material=null, state='ground';
+  const keep=[];
+  for(const w of words){
+    if(NUMS[w]!=null){ count=NUMS[w]; continue; }
+    if(/^\d+$/.test(w)){ count=Math.min(8,parseInt(w,10)); continue; }
+    if(COLORS[w]){ color=w; continue; }
+    if(MATERIALS[w] && keep.length===0){ material=MATERIALS[w]; continue; }
+    if(/^(flying|floating|hovering|soaring|levitating|airborne)$/.test(w)){ state='flying'; continue; }
+    if(/^(giant|huge|enormous|massive|colossal)$/.test(w)){ state = state==='flying'?state:'ground'; keep.push('§giant'); continue; }
+    if(/^(tiny|miniature|small|little)$/.test(w)){ keep.push('§tiny'); continue; }
+    if(/^(the|some|of|made|very|old|new|big|large|beautiful|lone|single|is|are|sits|stands|standing|sitting|lying|that|which|who|its|their|his|her)$/.test(w)) continue;
+    if(/(ing|ly)$/.test(w) && !(w in SIZES)) continue;
+    keep.push(w);
+  }
+  const giant = keep.includes('§giant'), tiny = keep.includes('§tiny');
+  const nouns = keep.filter(w=>!w.startsWith('§'));
+  if(!nouns.length) return null;
+  // material written after the noun, e.g. "whale made of glass"
+  for(let i=nouns.length-1;i>0;i--){ if(MATERIALS[nouns[i]]){ material=MATERIALS[nouns[i]]; nouns.splice(i,1); } }
+  let name = singular(nouns[nouns.length-1]);
+  if(nouns.length>=2){ const two = nouns[nouns.length-2]+' '+name; if(SIZES[two]!=null) name=two; }
+  if(nouns.length>=3){ const three = nouns.slice(-3,-1).join(' ')+' '+name; if(SIZES[three]!=null) name=three; }
+  if(SKY.has(name)) state='sky';
+  else if(FLYERS.has(name) && state==='ground' && name!=='dragon') state='flying';
+  let size = sizeOf(name); if(giant) size=Math.max(size*8, 4); if(tiny) size*=0.25;
+  return {name, search:name, count, color, material, state, size_m:size};
+}
+
+// ---------- Plan validation (used for AI plans and parser plans) ----------
+function normalizePlan(p, rawPrompt){
+  const fb = parsePrompt(rawPrompt||'');
+  if(!p || typeof p!=='object') return fb;
+  const st = p.setting||{};
+  const setting = {
+    query: String(st.query||'').slice(0,60),
+    kind: ['outdoor','indoor','space','underwater'].includes(st.kind)?st.kind:'outdoor',
+    time: ['day','sunrise','sunset','night','overcast'].includes(st.time)?st.time:'day',
+    weather: ['clear','fog','rain','snow','haze'].includes(st.weather)?st.weather:'clear',
+    tags: (Array.isArray(st.tags)?st.tags:[]).map(t=>String(t).toLowerCase()).slice(0,6)
+  };
+  // trust the parser for explicit weather/time words if AI missed them
+  if(setting.weather==='clear' && fb.setting.weather!=='clear') setting.weather=fb.setting.weather;
+  if(setting.time==='day' && fb.setting.time!=='day') setting.time=fb.setting.time;
+  let objects = (Array.isArray(p.objects)?p.objects:[]).slice(0,6).map(o=>{
+    const name = singular(String(o.name||o.search||'').toLowerCase().trim()) || 'object';
+    let color = o.color? String(o.color).toLowerCase().trim():null; if(color && !COLORS[color]){ const w=color.split(' ').find(x=>COLORS[x]); color=w||null; }
+    let material = o.material? MATERIALS[String(o.material).toLowerCase().trim()]||null : null;
+    let state = ['ground','flying','sky'].includes(o.state)?o.state:(SKY.has(name)?'sky':'ground');
+    const size = Number(o.size_m)>0 ? Math.min(400,Math.max(0.02,Number(o.size_m))) : sizeOf(name);
+    return {name, search:String(o.search||name).toLowerCase().slice(0,40), count:Math.max(1,Math.min(8,parseInt(o.count,10)||1)), color, material, state, size_m:size};
+  }).filter(o=>o.name);
+  if(!objects.length) return fb;
+  const n=objects.length;
+  const types=['left_of','right_of','behind','in_front_of','on','under','above','next_to'];
+  const relations=(Array.isArray(p.relations)?p.relations:[]).map(r=>({a:parseInt(r.a,10),b:parseInt(r.b,10),type:r.type})).filter(r=>r.a>=0&&r.b>=0&&r.a<n&&r.b<n&&r.a!==r.b&&types.includes(r.type)).slice(0,8);
+  const main = Math.max(0,Math.min(n-1,parseInt(p.main,10)||0));
+  return {setting, objects, relations, main, source:'ai'};
+}
+
+// ---------- Checklist: every claim in the prompt becomes a testable question ----------
+function plural(n){ if(/(s|x|ch|sh)$/.test(n)) return n+'es'; if(/[^aeiou]y$/.test(n)) return n.slice(0,-1)+'ies'; if(n==='person') return 'people'; return n+'s'; }
+function buildChecklist(plan){
+  const out=[]; const O=plan.objects;
+  O.forEach((o,i)=>{
+    out.push({g:i,kind:'presence',q:`Is there ${o.count>1?'at least one':'a'} ${o.name} in the picture?`});
+    if(o.count>1) out.push({g:i,kind:'count',q:`Are there ${o.count} ${plural(o.name)}?`});
+    if(o.color) out.push({g:i,kind:'color',q:`Is the ${o.name} ${o.color}?`});
+    if(o.material) out.push({g:i,kind:'material',q:`Does the ${o.name} look like it is made of ${o.material}?`});
+    if(o.state==='flying') out.push({g:i,kind:'state',q:`Is the ${o.name} in the air?`});
+  });
+  const words={left_of:'to the left of',right_of:'to the right of',behind:'behind',in_front_of:'in front of',on:'on top of',under:'under',above:'above',next_to:'next to'};
+  plan.relations.forEach(r=>out.push({rel:r,kind:'relation',q:`Is the ${O[r.a].name} ${words[r.type]} the ${O[r.b].name}?`}));
+  const s=plan.setting;
+  if(s.query) out.push({kind:'setting',q:`Is the scene set in ${/^[aeiou]/.test(s.query)?'an':'a'} ${s.query}?`});
+  if(s.weather!=='clear') out.push({kind:'weather',q:`Is it ${({fog:'foggy',rain:'raining',snow:'snowing',haze:'hazy'})[s.weather]}?`});
+  if(s.time==='night') out.push({kind:'time',q:'Is it night time?'});
+  if(s.time==='sunset'||s.time==='sunrise') out.push({kind:'time',q:`Is it ${s.time}?`});
+  return out;
+}
+
+// ---------- Geometry: a pinhole camera over a ground plane ----------
+// Everything is placed in metres, so relative sizes and ground contact stay physically consistent.
+function solveLayout(plan, aspects, W, H, scene, rng){
+  rng = rng || Math.random;
+  const f = W/(2*Math.tan(scene.fov/2));
+  const hz = scene.horizon*H;
+  const O = plan.objects; const m = plan.main||0;
+  const mainO = O[m];
+  const groups = O.map((o,g)=>({g, o, z:null, baseY:null, elev:0, x:null}));
+  // camera height from the main subject: put its base ~82% down the frame at a pleasant size
+  let camH = 1.6, zMain = 10;
+  const grounded = mainO.state==='ground';
+  // if the main subject sits ON something, frame the stack (support + subject) instead
+  const onRel = (plan.relations||[]).find(r=>r.type==='on' && r.a===m && O[r.b] && O[r.b].state==='ground');
+  const frameS = onRel ? O[onRel.b].size_m + mainO.size_m : mainO.size_m;
+  if(grounded){
+    const sMax = Math.max(...O.filter((o,i)=>o.state==='ground' && !(plan.relations||[]).some(r=>r.a===i&&r.type==='behind')).map(o=>o.size_m), frameS);
+    const target = Math.min(onRel ? 0.62 : (mainO.count>1?0.30:0.42), 0.8*frameS/sMax);
+    zMain = f*frameS/(target*H);
+    camH = (0.82*H - hz)*zMain/f;
+    const maxH = scene.kind==='indoor'?1.6:1.75;
+    camH = Math.min(maxH, Math.max(0.04, camH));
+  } else {
+    camH = scene.kind==='indoor'?1.5:1.65;
+    zMain = f*mainO.size_m/(0.30*H);
+  }
+  const zMinGround = f*camH/(0.975*H - hz); // closest a grounded thing can be and still touch the ground in frame
+  const pxH = (S,z)=> f*S/z;
+  const baseAt = (z,elev)=> hz + f*(camH-(elev||0))/z;
+  groups.forEach(G=>{
+    const o=G.o;
+    if(o.state==='sky') return;
+    let z = (G.g===m || (onRel && G.g===onRel.b)) ? zMain : zMain*(0.9+0.3*rng());
+    if(o.state==='ground'){
+      // keep secondary things readable: at least ~11% of frame height
+      if(!(onRel && (G.g===m||G.g===onRel.b))){
+        if(pxH(o.size_m,z) < 0.11*H) z = f*o.size_m/(0.11*H);
+        if(pxH(o.size_m,z) > 0.75*H) z = f*o.size_m/(0.75*H);
+      }
+      z = Math.max(z, zMinGround);
+    }
+    G.z=z;
+    if(o.state==='flying'){
+      const yc = (0.22+0.14*rng())*H; // centre of the flier
+      G.elev = camH - o.size_m/2 - (yc-hz)*z/f;
+      G.elev = Math.max(G.elev, o.size_m*0.6);
+    }
+  });
+  // relations that change depth or height
+  const rels = plan.relations||[];
+  const byG = i=>groups[i];
+  for(const r of rels){
+    const A=byG(r.a), B=byG(r.b); if(!A||!B||A.o.state==='sky'||B.o.state==='sky') continue;
+    if(r.type==='behind'){ A.z = Math.max(A.z, B.z*1.7); }
+    if(r.type==='in_front_of'){ A.z = Math.max(zMinGround, Math.min(A.z, B.z*0.62)); }
+    if(r.type==='on'||r.type==='under'||r.type==='above'){ A.z = B.z*(r.type==='under'?1.01:0.995); }
+  }
+  // screen sizes
+  groups.forEach(G=>{
+    if(G.o.state==='sky'){ G.hpx = (G.o.name==='cloud'?0.25:0.13)*H; G.wpx=G.hpx*(aspects[G.g]||1); return; }
+    G.hpx = pxH(G.o.size_m, G.z); G.wpx = G.hpx*(aspects[G.g]||1);
+    G.baseY = baseAt(G.z, G.elev);
+  });
+  for(const r of rels){
+    const A=byG(r.a), B=byG(r.b); if(!A||!B||A.o.state==='sky'||B.o.state==='sky') continue;
+    if(r.type==='on'){ A.baseY = B.baseY - B.hpx*0.9; A.onTop=true; }
+    if(r.type==='under'){ A.baseY = B.baseY; }
+    if(r.type==='above'){ A.baseY = B.baseY - B.hpx - 0.12*H; A.floating=true; }
+  }
+  // horizontal placement: lay groups out in prompt order, then enforce left/right relations
+  const groupWidth = G=> G.wpx*(G.o.count>1? (1+0.75*(G.o.count-1)) : 1);
+  const stacked = new Set(rels.filter(r=>['on','under','above'].includes(r.type)).map(r=>r.a));
+  const free = groups.filter(G=>G.o.state!=='sky' && !stacked.has(G.g));
+  const total = free.reduce((s,G)=>s+groupWidth(G),0) + 0.06*W*(free.length-1);
+  let cx = W/2 - Math.min(total,W*0.9)/2;
+  const squeeze = total>W*0.9 ? (W*0.9)/total : 1;
+  free.forEach(G=>{ const gw=groupWidth(G)*squeeze; G.x = cx + gw/2; cx += gw + 0.06*W*squeeze; });
+  for(let pass=0;pass<3;pass++) for(const r of rels){
+    const A=byG(r.a), B=byG(r.b); if(!A||!B||A.o.state==='sky'||B.o.state==='sky') continue;
+    const gap = (groupWidth(A)+groupWidth(B))/2*0.92 + 0.03*W;
+    if(r.type==='left_of' && !(A.x < B.x-gap*0.6)) A.x = B.x-gap;
+    if(r.type==='right_of'||r.type==='next_to'){ if(!(A.x > B.x+gap*0.6) && !(r.type==='next_to' && A.x < B.x-gap*0.6)) A.x = B.x+gap; }
+    if(r.type==='on'||r.type==='under'||r.type==='above') A.x = B.x;
+    if(r.type==='behind') A.x = B.x + (B.wpx*0.45)*(rng()<0.5?-1:1);
+    if(r.type==='in_front_of') A.x = B.x + (B.wpx*0.3)*(rng()<0.5?-1:1);
+  }
+  // shift everything back into frame if relations pushed it out
+  const placed = groups.filter(G=>G.o.state!=='sky');
+  const xs = placed.map(G=>[G.x-groupWidth(G)/2, G.x+groupWidth(G)/2]);
+  if(xs.length){ const lo=Math.min(...xs.map(a=>a[0])), hi=Math.max(...xs.map(a=>a[1])); let shift=0; if(lo<W*0.03) shift=W*0.03-lo; if(hi+shift>W*0.97) shift-= (hi+shift-W*0.97)*(hi-lo<W*0.94?1:0.5); placed.forEach(G=>G.x+=shift); }
+  // expand counts into instances
+  const inst=[];
+  groups.forEach(G=>{
+    const o=G.o;
+    if(o.state==='sky'){
+      for(let i=0;i<o.count;i++) inst.push({g:G.g,i,sky:true,x:W*(0.18+0.64*rng()),y:H*(0.1+0.12*rng()),hpx:G.hpx*(0.9+0.2*rng()),aspect:aspects[G.g]||1,z:1e6});
+      return;
+    }
+    const n=o.count; const gw=groupWidth(G)*squeeze;
+    for(let i=0;i<n;i++){
+      const t = n===1?0:(i/(n-1)-0.5);
+      const dz = n===1?1:(1+0.10*((i%2)?1:-0.6)*rng());
+      let z=G.z*dz; if(o.state==='ground') z=Math.max(z,zMinGround);
+      const hpx = pxH(o.size_m,z);
+      const baseY = (G.onTop||G.floating||o.state!=='ground') ? G.baseY + (o.state==='flying'? (rng()-0.5)*0.08*H : 0) : baseAt(z,0);
+      inst.push({g:G.g,i,x:G.x + t*(gw-G.wpx*squeeze), baseY, hpx, wpx:hpx*(aspects[G.g]||1), z, flying:o.state==='flying'||!!G.floating, onTop:!!G.onTop});
+    }
+  });
+  inst.sort((a,b)=>b.z-a.z);
+  return {inst, camH, f, hz, zFocus: groups[m].z || zMain};
+}
+
+// Self-check: does the layout actually satisfy the prompt's countable/spatial claims?
+function verifyLayout(plan, L, W, H){
+  const res=[];
+  plan.objects.forEach((o,g)=>{
+    const mine=L.inst.filter(I=>I.g===g);
+    const visible=mine.filter(I=>I.sky || (I.x+ (I.wpx||I.hpx)/2>0 && I.x-(I.wpx||I.hpx)/2<W && (I.baseY-I.hpx)<H && I.hpx>H*0.03));
+    res.push({g,kind:'presence',ok:visible.length>0});
+    if(o.count>1) res.push({g,kind:'count',ok:visible.length===o.count});
+  });
+  const cen=g=>{ const a=L.inst.filter(I=>I.g===g); return a.length? {x:a.reduce((s,I)=>s+I.x,0)/a.length, z:a.reduce((s,I)=>s+I.z,0)/a.length, y:a.reduce((s,I)=>s+(I.baseY||I.y),0)/a.length}:null; };
+  (plan.relations||[]).forEach(r=>{
+    const A=cen(r.a), B=cen(r.b); let ok=true;
+    if(!A||!B) ok=false;
+    else if(r.type==='left_of') ok=A.x<B.x; else if(r.type==='right_of') ok=A.x>B.x;
+    else if(r.type==='behind') ok=A.z>B.z; else if(r.type==='in_front_of') ok=A.z<B.z;
+    else if(r.type==='on'||r.type==='above') ok=A.y<B.y; else if(r.type==='under') ok=Math.abs(A.y-B.y)<H*0.05;
+    res.push({rel:r,kind:'relation',ok});
+  });
+  return res;
+}
+
+if(typeof module!=='undefined') module.exports={parsePrompt,normalizePlan,buildChecklist,solveLayout,verifyLayout,singular,COLORS,MATERIALS};
+</script>
+
+<!-- ===================== APP (browser) ===================== -->
+<script>
+'use strict';
+const $=id=>document.getElementById(id);
+const W=1024, H=683;
+const LS={get:(k,d)=>{try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v);}catch{return d;}},set:(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v));}catch{}}};
+const cfg = Object.assign({worker:'',nvar:4,pstr:0.28,useVision:true,usePolish:true,hdBg:false}, LS.get('assemblage.cfg',{}));
+const workerURL=()=> (cfg.worker||'').replace(/\/+$/,'');
+
+// ---------- feedback: toasts + step list (no silent failures) ----------
+function toast(msg,kind='',ms=4200){ const t=document.createElement('div'); t.className='toast '+kind; t.textContent=msg; $('toasts').appendChild(t); setTimeout(()=>t.remove(),ms); }
+const STEPS=['Plan the scene','Find a background','Find & cut out objects','Arrange with real geometry','Light, shadow & camera pass','Check against the prompt','Repair weak spots','AI polish pass'];
+function resetSteps(){ $('steps').innerHTML=STEPS.map((s,i)=>`<li id="st${i}">${s}</li>`).join(''); }
+function step(i,state,note){ const li=$('st'+i); if(!li) return; li.className=state; li.textContent=STEPS[i]+(note?' — '+note:''); }
+
+// ---------- networking ----------
+async function xfetch(url, as='blob'){
+  const tries=[];
+  if(workerURL()) tries.push(workerURL()+'/fetch?url='+encodeURIComponent(url));
+  tries.push(url);
+  let err;
+  for(const u of tries){
+    try{ const r=await fetch(u,{mode:'cors'}); if(!r.ok) throw new Error('HTTP '+r.status); return as==='json'?await r.json():await r.blob(); }catch(e){ err=e; }
+  }
+  throw err||new Error('fetch failed');
+}
+async function workerPost(path, body, as='json'){
+  const r=await fetch(workerURL()+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(!r.ok){ let m='HTTP '+r.status; try{ const j=await r.json(); m=j.error||m; }catch{} const e=new Error(m); e.status=r.status; throw e; }
+  return as==='json'?r.json():r.blob();
+}
+async function loadBitmap(url){ const b=await xfetch(url,'blob'); if(!/^image\//.test(b.type) && b.size<200) throw new Error('not an image'); return await createImageBitmap(b); }
+
+// ---------- canvas helpers ----------
+function mk(w,h){ const c=document.createElement('canvas'); c.width=Math.max(1,Math.round(w)); c.height=Math.max(1,Math.round(h)); return c; }
+function ctx2(c){ return c.getContext('2d',{willReadFrequently:true}); }
+const clamp=(v,a,b)=>v<a?a:v>b?b:v;
+const lum=(r,g,b)=>(0.2126*r+0.7152*g+0.0722*b);
+function rgbToHsl(r,g,b){ r/=255;g/=255;b/=255; const mx=Math.max(r,g,b),mn=Math.min(r,g,b); let h=0,s=0; const l=(mx+mn)/2; if(mx!==mn){ const d=mx-mn; s=l>0.5?d/(2-mx-mn):d/(mx+mn); h= mx===r?(g-b)/d+(g<b?6:0): mx===g?(b-r)/d+2:(r-g)/d+4; h/=6; } return [h,s,l]; }
+function hslToRgb(h,s,l){ if(s===0){ const v=l*255; return [v,v,v]; } const q=l<0.5?l*(1+s):l+s-l*s, p=2*l-q; const f=t=>{ if(t<0)t+=1; if(t>1)t-=1; if(t<1/6) return p+(q-p)*6*t; if(t<1/2) return q; if(t<2/3) return p+(q-p)*(2/3-t)*6; return p; }; return [f(h+1/3)*255,f(h)*255,f(h-1/3)*255]; }
+function seeded(seed){ let s=seed>>>0||1; return ()=>{ s^=s<<13; s^=s>>>17; s^=s<<5; return ((s>>>0)%100000)/100000; }; }
+function boxBlur(a,w,h,r){ // separable box blur on Float32Array
+  const t=new Float32Array(a.length); r=Math.max(1,r|0);
+  for(let y=0;y<h;y++){ let acc=0; const o=y*w; for(let x=-r;x<=r;x++) acc+=a[o+clamp(x,0,w-1)]; for(let x=0;x<w;x++){ t[o+x]=acc/(2*r+1); acc+=a[o+clamp(x+r+1,0,w-1)]-a[o+clamp(x-r,0,w-1)]; } }
+  for(let x=0;x<w;x++){ let acc=0; for(let y=-r;y<=r;y++) acc+=t[clamp(y,0,h-1)*w+x]; for(let y=0;y<h;y++){ a[y*w+x]=acc/(2*r+1); acc+=t[clamp(y+r+1,0,h-1)*w+x]-t[clamp(y-r,0,h-1)*w+x]; } }
+  return a;
+}
+
+// ---------- Sources: Wikimedia Commons, Openverse, Poly Haven ----------
+const credits=new Map();
+function credit(url,info){ credits.set(url,info); }
+async function commonsSearch(q, n=24, thumbW=640){
+  const u='https://commons.wikimedia.org/w/api.php?action=query&format=json&origin=*&generator=search&gsrnamespace=6&gsrlimit='+n+'&gsrsearch='+encodeURIComponent(q)+'&prop=imageinfo&iiprop=url|size|mime|extmetadata&iiurlwidth='+thumbW;
+  const j=await xfetch(u,'json');
+  const pages=Object.values((j.query&&j.query.pages)||{}).sort((a,b)=>(a.index||0)-(b.index||0));
+  return pages.map(p=>{ const ii=(p.imageinfo||[])[0]||{}; const md=ii.extmetadata||{}; const strip=s=>String(s||'').replace(/<[^>]+>/g,'').trim();
+    return {src:'commons',title:p.title.replace(/^File:/,''),url:ii.thumburl||ii.url,page:ii.descriptionurl,w:ii.width,h:ii.height,mime:ii.mime,license:strip(md.LicenseShortName&&md.LicenseShortName.value),author:strip(md.Artist&&md.Artist.value).slice(0,60)}; }).filter(x=>x.url);
+}
+async function openverseSearch(q, extra=''){
+  const u='https://api.openverse.org/v1/images/?page_size=20&mature=false&q='+encodeURIComponent(q)+extra;
+  const j=await xfetch(u,'json');
+  return (j.results||[]).map(r=>({src:'openverse',title:r.title||q,url:r.thumbnail||r.url,page:r.foreign_landing_url,w:r.width,h:r.height,license:(r.license||'').toUpperCase()+' '+(r.license_version||''),author:(r.creator||'').slice(0,60)}));
+}
+const BAD_TITLES=/(logo|icon|map|flag|diagram|coat of arms|emblem|symbol|chart|graph|clip.?art|cartoon|illustration|vector|drawing|sketch|font|text|seal|badge|sign|stamp|svg|pictogram|emoji|silhouette|outline|line art|comic)/i;
+
+// ---------- Cutout analysis: PNG alpha first, plain-background photos second ----------
+function analyzeCutout(bmp){
+  const s=Math.min(1,256/Math.max(bmp.width,bmp.height)); const w=Math.max(8,Math.round(bmp.width*s)), h=Math.max(8,Math.round(bmp.height*s));
+  const c=mk(w,h), x=ctx2(c); x.drawImage(bmp,0,0,w,h); const d=x.getImageData(0,0,w,h).data;
+  let transp=0, border=0, borderT=0, minX=w,minY=h,maxX=0,maxY=0; const q=new Set();
+  for(let y=0;y<h;y++) for(let xx=0;xx<w;xx++){ const i=(y*w+xx)*4, a=d[i+3]; const edge= y===0||xx===0||y===h-1||xx===w-1; if(edge){ border++; if(a<24) borderT++; }
+    if(a<24) transp++; else { if(xx<minX)minX=xx; if(xx>maxX)maxX=xx; if(y<minY)minY=y; if(y>maxY)maxY=y; q.add((d[i]>>4)<<8|(d[i+1]>>4)<<4|(d[i+2]>>4)); } }
+  const tf=transp/(w*h), bf=borderT/border;
+  if(tf>0.08 && bf>0.8 && tf<0.94){
+    const photo = q.size>220; // clip-art has few colours
+    return {mode:'alpha', score: (photo?1:0.35) * (0.6+0.4*bf) * (1-Math.abs(tf-0.5)*0.6), bbox:[minX/s,minY/s,(maxX+1)/s,(maxY+1)/s]};
+  }
+  // no useful alpha: is the border a plain studio backdrop?
+  let mr=0,mg=0,mb=0,n=0; const bpx=[];
+  for(let y=0;y<h;y++) for(let xx=0;xx<w;xx++){ if(!(y<2||xx<2||y>=h-2||xx>=w-2)) continue; const i=(y*w+xx)*4; bpx.push([d[i],d[i+1],d[i+2]]); mr+=d[i];mg+=d[i+1];mb+=d[i+2];n++; }
+  mr/=n;mg/=n;mb/=n; let v=0; for(const p of bpx) v+=(p[0]-mr)**2+(p[1]-mg)**2+(p[2]-mb)**2; const sd=Math.sqrt(v/n/3);
+  if(sd<22 && q.size>150) return {mode:'flood', score:0.55*(1-sd/30), bg:[mr,mg,mb], sd};
+  return {mode:'none',score:0};
+}
+function floodCutout(bmp, bg, sd){
+  const s=Math.min(1,900/Math.max(bmp.width,bmp.height)); const w=Math.round(bmp.width*s), h=Math.round(bmp.height*s);
+  const c=mk(w,h), x=ctx2(c); x.drawImage(bmp,0,0,w,h); const img=x.getImageData(0,0,w,h), d=img.data;
+  const tol=(Math.max(14,sd*3+18))**2; const bgm=new Uint8Array(w*h); const st=[];
+  for(let i=0;i<w;i++){ st.push(i, (h-1)*w+i); } for(let j=0;j<h;j++){ st.push(j*w, j*w+w-1); }
+  while(st.length){ const p=st.pop(); if(bgm[p]) continue; const i=p*4; const dd=(d[i]-bg[0])**2+(d[i+1]-bg[1])**2+(d[i+2]-bg[2])**2; if(dd>tol) continue; bgm[p]=1; const px=p%w, py=(p/w)|0; if(px>0)st.push(p-1); if(px<w-1)st.push(p+1); if(py>0)st.push(p-w); if(py<h-1)st.push(p+w); }
+  const a=new Float32Array(w*h); for(let p=0;p<w*h;p++) a[p]=bgm[p]?0:1; boxBlur(a,w,h,1);
+  let fg=0; for(let p=0;p<w*h;p++){ d[p*4+3]=Math.round(clamp((a[p]-0.15)/0.7,0,1)*255); if(a[p]>0.5) fg++; }
+  // de-fringe: pull edge colours away from the backdrop colour
+  for(let p=0;p<w*h;p++){ const al=d[p*4+3]/255; if(al>0&&al<1){ for(let k=0;k<3;k++) d[p*4+k]=clamp((d[p*4+k]-bg[k]*(1-al))/Math.max(al,0.25),0,255); } }
+  x.putImageData(img,0,0);
+  const frac=fg/(w*h); if(frac<0.06||frac>0.9) return null;
+  return trimAlpha(c);
+}
+function trimAlpha(c){
+  const x=ctx2(c), d=x.getImageData(0,0,c.width,c.height).data; let minX=c.width,minY=c.height,maxX=-1,maxY=-1;
+  for(let y=0;y<c.height;y++) for(let xx=0;xx<c.width;xx++) if(d[(y*c.width+xx)*4+3]>20){ if(xx<minX)minX=xx; if(xx>maxX)maxX=xx; if(y<minY)minY=y; if(y>maxY)maxY=y; }
+  if(maxX<0) return null;
+  // keep only the biggest connected blob's bounding area is costly; bbox trim is enough here
+  const o=mk(maxX-minX+1,maxY-minY+1); o.getContext('2d').drawImage(c,minX,minY,o.width,o.height,0,0,o.width,o.height); return o;
+}
+function alphaCutout(bmp, bbox){
+  const s=Math.min(1,900/Math.max(bmp.width,bmp.height)); const c=mk(bmp.width*s,bmp.height*s); c.getContext('2d').drawImage(bmp,0,0,c.width,c.height);
+  return trimAlpha(c);
+}
+
+// learned library: cutouts that won before get tried first
+function libGet(term){ return (LS.get('assemblage.lib',{})[term]||[]).sort((a,b)=>b.wins-a.wins); }
+function libWin(term,cand){ const lib=LS.get('assemblage.lib',{}); const arr=lib[term]||[]; const e=arr.find(x=>x.url===cand.url); if(e) e.wins++; else arr.push({url:cand.url,title:cand.title,page:cand.page,license:cand.license,author:cand.author,src:cand.src,wins:1}); lib[term]=arr.slice(-12); LS.set('assemblage.lib',lib); }
+
+async function findCutouts(o, want=3){
+  const term=o.search||o.name; const found=[], backups=[]; const seen=new Set();
+  const tryList=async(list,label)=>{
+    for(const c of list){
+      if(found.length>=want) return; if(seen.has(c.url)) continue; seen.add(c.url);
+      if(c.title && BAD_TITLES.test(c.title) && !c.wins) continue;
+      try{
+        const bmp=await loadBitmap(c.url); const a=analyzeCutout(bmp); let cut=null;
+        if(a.mode==='alpha' && a.score>0.3) cut=alphaCutout(bmp,a.bbox);
+        else if(a.mode==='alpha' && a.score>0.1 && backups.length<2){ const b=alphaCutout(bmp,a.bbox); if(b) backups.push({...c,canvas:b,quality:a.score,mode:'alpha-graphic'}); }
+        else if(a.mode==='flood') cut=floodCutout(bmp,a.bg,a.sd);
+        if(cut && cut.width>12 && cut.height>12){ found.push({...c, canvas:cut, quality:a.score+(c.wins?0.5:0), mode:a.mode}); }
+      }catch(e){ /* unreachable image: skip quietly, counted below */ }
+    }
+  };
+  const lib=libGet(term); if(lib.length) await tryList(lib,'library');
+  try{ await tryList(await commonsSearch(term+' filemime:png'),'commons png'); }catch(e){ toast('Commons search failed for "'+term+'": '+e.message,'err'); }
+  if(found.length<want){ try{ await tryList(await commonsSearch(term+' isolated white background filemime:jpeg',16),'commons isolated'); }catch{} }
+  if(found.length<want){ try{ await tryList(await openverseSearch(term+' isolated white background'),'openverse'); }catch(e){ toast('Openverse unavailable ('+e.message+')',''); } }
+  if(!found.length && backups.length){ toast('Only illustration-style cutouts found for "'+term+'" — using the best one.'); return backups; }
+  found.sort((a,b)=>b.quality-a.quality);
+  return found;
+}
+
+// ---------- Backgrounds: Poly Haven HDRIs (360° photos that also tell us where the light is) ----------
+let phAssets=null;
+async function polyHavenList(){
+  if(phAssets) return phAssets;
+  const cached=LS.get('assemblage.ph',null);
+  if(cached && Date.now()-cached.t<7*864e5){ phAssets=cached.d; return phAssets; }
+  const j=await xfetch('https://api.polyhaven.com/assets?t=hdris','json');
+  phAssets=Object.entries(j).map(([id,a])=>({id,name:a.name,cats:a.categories||[],tags:a.tags||[]}));
+  LS.set('assemblage.ph',{t:Date.now(),d:phAssets});
+  return phAssets;
+}
+function scoreHdri(a, s){
+  const words=new Set([...(s.tags||[]), ...String(s.query||'').split(/\s+/)].map(w=>singular(w.toLowerCase())).filter(w=>w.length>2));
+  const bag=new Set([...a.cats,...a.tags,...a.name.toLowerCase().split(/[\s_]+/)].map(w=>singular(String(w).toLowerCase())));
+  let sc=0; words.forEach(w=>{ if(bag.has(w)) sc+=2; });
+  const has=k=>bag.has(k);
+  if(s.kind==='indoor') sc+= has('indoor')?2:-3; else sc+= has('outdoor')?1: has('indoor')?-3:0;
+  if(s.time==='night') sc+= has('night')?4:-2; else if(has('night')) sc-=4;
+  if(s.time==='sunset'||s.time==='sunrise') sc+= has('sunrise-sunset')||has('sunset')||has('sunrise')?3:0;
+  if(s.time==='overcast'||s.weather==='fog'||s.weather==='rain') sc+= has('overcast')||has('low contrast')?2:0;
+  if(s.time==='day'&&s.weather==='clear') sc+= has('clear')||has('midday')||has('partly cloudy')?1:0;
+  if(s.weather==='snow') sc+= has('snow')||has('winter')?3:0;
+  return sc;
+}
+// Find the sun (or the brightest light) in the equirectangular panorama.
+function findLight(src){
+  const w=256,h=128, c=mk(w,h), x=ctx2(c); x.drawImage(src,0,0,w,h); const d=x.getImageData(0,0,w,h).data;
+  const L=new Float32Array(w*h); for(let i=0;i<w*h;i++) L[i]=lum(d[i*4],d[i*4+1],d[i*4+2]);
+  const sorted=Array.from(L).sort((a,b)=>a-b); const med=sorted[(w*h/2)|0], thr=sorted[Math.floor(w*h*0.997)];
+  let sx=0,sy=0,sv=0,top=0,nt=0; for(let i=0;i<w*h;i++) if(L[i]>=thr){ const u=(i%w)/w, v=((i/w)|0)/h; const ph=(u-0.5)*2*Math.PI; sx+=Math.cos(ph)*L[i]; sy+=Math.sin(ph)*L[i]; sv+=v*L[i]; top+=L[i]; nt++; }
+  const az=Math.atan2(sy,sx), el=(0.5-sv/top)*Math.PI; const ratio=(top/nt)/Math.max(8,med);
+  const mx=sorted[w*h-1]; let bright=0; for(let i=0;i<w*h;i++) if(L[i]>=mx*0.97) bright++;
+  const compact = mx>235 && bright/(w*h)<0.004;
+  return {az, el:clamp(el,0.05,1.4), hard: clamp((ratio-1.3)/1.2,0,1)*(compact?1:0.4)};
+}
+function reproject(src, W, H, fov, yaw, horizon){
+  const sw=src.width, sh=src.height; const sc=mk(sw,sh), sx=ctx2(sc); sx.drawImage(src,0,0); const S=sx.getImageData(0,0,sw,sh).data;
+  const out=new ImageData(W,H), D=out.data; const f=W/(2*Math.tan(fov/2)); const p=Math.atan((horizon-0.5)*H/f), cp=Math.cos(p), sp=Math.sin(p);
+  for(let y=0;y<H;y++){ const dy=-(y-H/2)/f; for(let x=0;x<W;x++){ const dx=(x-W/2)/f; const yy=dy*cp+sp, zz=-dy*sp+cp; const ph=yaw+Math.atan2(dx,zz), th=Math.atan2(yy,Math.hypot(dx,zz));
+    let u=(ph/(2*Math.PI)+0.5)%1; if(u<0)u+=1; const v=clamp(0.5-th/Math.PI,0,0.9999); const fx=u*sw-0.5, fy=v*sh-0.5; const x0=Math.floor(fx), y0=clamp(Math.floor(fy),0,sh-1), y1=clamp(y0+1,0,sh-1), ax=fx-x0, ay=fy-y0; const xa=((x0%sw)+sw)%sw, xb=(xa+1)%sw;
+    const o=(y*W+x)*4; for(let k=0;k<3;k++){ const a=S[(y0*sw+xa)*4+k], b=S[(y0*sw+xb)*4+k], c=S[(y1*sw+xa)*4+k], e=S[(y1*sw+xb)*4+k]; D[o+k]=(a*(1-ax)+b*ax)*(1-ay)+(c*(1-ax)+e*ax)*ay; } D[o+3]=255; } }
+  const c=mk(W,H); c.getContext('2d').putImageData(out,0,0); return c;
+}
+function timeMatches(a,s){ const bag=[...a.cats,...a.tags].join(' '); if(s.time==='night') return /night/.test(bag); if(s.time==='sunset'||s.time==='sunrise') return /sunset|sunrise|dusk|dawn/.test(bag); return !/night/.test(bag); }
+// Day-for-night and golden-hour grades: the old film trick for when no matching photo exists
+function timeGrade(c, time){
+  const x=ctx2(c), img=x.getImageData(0,0,c.width,c.height), d=img.data;
+  for(let i=0;i<d.length;i+=4){ const r=d[i],g=d[i+1],b=d[i+2], l=lum(r,g,b);
+    if(time==='night'){ const k=0.22+0.25*Math.pow(l/255,2); d[i]=(r*0.35+l*0.65)*k*0.75; d[i+1]=(g*0.35+l*0.65)*k*0.9; d[i+2]=Math.min(255,(b*0.35+l*0.65)*k*1.35+6); }
+    else { d[i]=clamp(r*1.12+18,0,255); d[i+1]=clamp(g*0.98+4,0,255); d[i+2]=clamp(b*0.78,0,255); }
+  }
+  x.putImageData(img,0,0);
+}
+async function findBackground(plan){
+  const s=plan.setting; const opts=[];
+  if(s.kind==='space'){ return {kind:'space'}; }
+  if(s.kind!=='underwater'){
+    try{
+      const list=await polyHavenList(); const ranked=list.map(a=>({a,sc:scoreHdri(a,s)})).sort((x,y)=>y.sc-x.sc);
+      const strongMatch = !s.query || ranked[0].sc>=4;
+      if(strongMatch){
+        for(const {a} of ranked.slice(0,3)){
+          try{ const url=`https://cdn.polyhaven.com/asset_img/primary/${a.id}.png?width=${cfg.hdBg?4096:2048}`; const bmp=await loadBitmap(url);
+            if(Math.abs(bmp.width/bmp.height-2)>0.1) continue; opts.push({kind:'hdri',bmp,id:a.id,name:a.name,url,timeOK:timeMatches(a,s)}); credit(url,{title:a.name+' (HDRI)',page:'https://polyhaven.com/a/'+a.id,license:'CC0',author:'Poly Haven'}); if(opts.length>=2) break; }catch(e){}
+        }
+      }
+    }catch(e){ toast('Poly Haven unavailable — using photo backgrounds ('+e.message+')'); }
+  }
+  if(!opts.length && (s.query||s.kind==='underwater')){
+    const q=(s.query||'underwater')+(s.kind==='indoor'?' interior':'');
+    let list=[]; try{ list=await commonsSearch(q+' filemime:jpeg',20,1280); }catch(e){ toast('Background search failed: '+e.message,'err'); }
+    list=list.filter(c=>c.w/c.h>1.25 && !BAD_TITLES.test(c.title));
+    for(const c of list.slice(0,6)){ try{ const bmp=await loadBitmap(c.url); opts.push({kind:'photo',bmp,url:c.url}); credit(c.url,c); if(opts.length>=2) break; }catch{} }
+  }
+  if(!opts.length){
+    // last resort: any outdoor HDRI
+    try{ const list=await polyHavenList(); const a=list.find(x=>x.cats.includes('outdoor')); const url=`https://cdn.polyhaven.com/asset_img/primary/${a.id}.png?width=2048`; const bmp=await loadBitmap(url); opts.push({kind:'hdri',bmp,id:a.id,url}); credit(url,{title:a.name+' (HDRI)',page:'https://polyhaven.com/a/'+a.id,license:'CC0',author:'Poly Haven'}); toast('No close background match — using a general outdoor scene.'); }catch{}
+  }
+  return opts.length? {kind:'list',opts} : {kind:'procedural'};
+}
+// Build the actual backdrop canvas for one variant + the scene lighting description
+function prepareBackground(bgInfo, plan, variant, rng){
+  const s=plan.setting; const fov=60*Math.PI/180; const horizon=0.55;
+  const scene={fov,horizon,kind:s.kind,time:s.time,weather:s.weather};
+  let canvas;
+  if(bgInfo.kind==='list'){
+    const o=bgInfo.opts[variant%bgInfo.opts.length];
+    if(o.kind==='hdri'){
+      const L=o.light||(o.light=findLight(o.bmp));
+      const side=(variant%2?1:-1); const rel=side*(variant>=2?0.55:2.1); // front-side light or rim light
+      const yaw=L.az-rel;
+      canvas=reproject(o.bmp,W,H,fov,yaw,horizon);
+      scene.light={x:Math.sin(rel)*Math.cos(L.el), y:Math.sin(L.el), fwd:Math.cos(rel)*Math.cos(L.el), el:L.el, rel, hard:(s.time==='overcast'||s.weather!=='clear'||s.time==='night')?Math.min(0.15,L.hard):L.hard};
+    } else {
+      canvas=mk(W,H); const x=canvas.getContext('2d'); const sc=Math.max(W/o.bmp.width,H/o.bmp.height); const dw=o.bmp.width*sc, dh=o.bmp.height*sc; x.drawImage(o.bmp,(W-dw)/2,(H-dh)/2,dw,dh);
+      // light from the brighter side of the photo
+      const d=ctx2(canvas).getImageData(0,0,W,H).data; let l=0,r=0; for(let y=0;y<H;y+=8) for(let xx=0;xx<W;xx+=8){ const v=lum(d[(y*W+xx)*4],d[(y*W+xx)*4+1],d[(y*W+xx)*4+2]); if(xx<W/2) l+=v; else r+=v; }
+      const lx=clamp((r-l)/(r+l+1)*4,-0.9,0.9);
+      scene.light={x:lx,y:0.6,fwd:-0.5,el:0.7,rel:Math.asin(clamp(lx,-1,1)),hard:0.12};
+      scene.horizon=0.5;
+    }
+  } else if(bgInfo.kind==='space'){
+    canvas=mk(W,H); const x=canvas.getContext('2d'); x.fillStyle='#02030a'; x.fillRect(0,0,W,H);
+    for(let i=0;i<1400;i++){ const b=rng()**3; x.fillStyle=`rgba(${200+55*rng()|0},${200+55*rng()|0},255,${0.2+0.8*b})`; const r=b*1.6+0.3; x.fillRect(rng()*W,rng()*H,r,r); }
+    const g=x.createRadialGradient(W*0.7,H*0.3,10,W*0.7,H*0.3,W*0.6); g.addColorStop(0,'rgba(120,80,160,.25)'); g.addColorStop(1,'rgba(0,0,0,0)'); x.fillStyle=g; x.fillRect(0,0,W,H);
+    scene.light={x:0.8,y:0.3,fwd:-0.3,el:0.3,rel:1.2,hard:0.9}; scene.horizon=1.4; scene.noGround=true;
+  } else {
+    canvas=mk(W,H); const x=canvas.getContext('2d'); const g=x.createLinearGradient(0,0,0,H); const night=s.time==='night';
+    g.addColorStop(0,night?'#0b1430':'#7fa8d8'); g.addColorStop(horizon,night?'#28304a':'#dfe7ee'); g.addColorStop(horizon+0.001,night?'#1a1c1e':'#7d7a62'); g.addColorStop(1,night?'#0e0f10':'#4b4a3a'); x.fillStyle=g; x.fillRect(0,0,W,H);
+    scene.light={x:0.6,y:0.7,fwd:-0.4,el:0.8,rel:2.1,hard:0.5};
+    toast('Using a simple painted backdrop — no background photo could be loaded.','err');
+  }
+  if(bgInfo.kind==='list' && (plan.setting.time==='night'||plan.setting.time==='sunset'||plan.setting.time==='sunrise')){ const o=bgInfo.opts[variant%bgInfo.opts.length]; if(!o.timeOK){ timeGrade(canvas, plan.setting.time==='night'?'night':'warm'); if(plan.setting.time==='night'&&scene.light) scene.light.hard*=0.3; } }
+  // scene statistics used for harmonising the objects
+  const d=ctx2(canvas).getImageData(0,0,W,H).data; let r=0,g=0,b=0,n=0, hr=0,hg=0,hb=0,hn=0; const hy=Math.round(clamp(scene.horizon,0.05,0.95)*H);
+  for(let y=0;y<H;y+=6) for(let xx=0;xx<W;xx+=6){ const i=(y*W+xx)*4; r+=d[i];g+=d[i+1];b+=d[i+2];n++; if(Math.abs(y-hy)<H*0.08){ hr+=d[i];hg+=d[i+1];hb+=d[i+2];hn++; } }
+  scene.mean=[r/n,g/n,b/n]; scene.meanLum=lum(r/n,g/n,b/n); scene.hazeCol= hn?[hr/hn,hg/hn,hb/hn]:scene.mean;
+  return {canvas, scene};
+}
+
+// ---------- Per-object processing: colour, material, harmonise, relight, haze, light wrap ----------
+function processSprite(src, w, h, o, scene, place, bgCanvas){
+  w=Math.max(4,Math.round(w)); h=Math.max(4,Math.round(h));
+  const c=mk(w,h), x=ctx2(c); x.imageSmoothingQuality='high'; x.drawImage(src,0,0,w,h);
+  const img=x.getImageData(0,0,w,h), d=img.data, N=w*h;
+  // local background stats under the object
+  const bx=clamp(Math.round(place.left),0,W-1), by=clamp(Math.round(place.top),0,H-1), bw=clamp(Math.round(w),1,W-bx), bh=clamp(Math.round(h),1,H-by);
+  const bd=ctx2(bgCanvas).getImageData(bx,by,bw,bh).data; let br=0,bg=0,bb=0,bn=0; for(let i=0;i<bd.length;i+=16){ br+=bd[i];bg+=bd[i+1];bb+=bd[i+2];bn++; } br/=bn;bg/=bn;bb/=bn; const bL=lum(br,bg,bb);
+  // object mean luminance
+  let mL=0,an=0; for(let p=0;p<N;p++){ const a=d[p*4+3]; if(a>30){ mL+=lum(d[p*4],d[p*4+1],d[p*4+2]); an++; } } mL=an?mL/an:128;
+  // 1) colour from the prompt (keeps the photo's shading, swaps hue)
+  const col=o.color&&COLORS[o.color];
+  if(col){ const [Ht,St,Lt]=rgbToHsl(...col); const ach=St<0.08; for(let p=0;p<N;p++){ if(d[p*4+3]<8) continue; const l=lum(d[p*4],d[p*4+1],d[p*4+2])/255; const nl=clamp(l+(Lt-mL/255)*0.9,0.02,0.98); const [r,g,b]=hslToRgb(Ht,ach?0:Math.min(1,St*1.05),nl); d[p*4]=r*0.92+d[p*4]*0.08; d[p*4+1]=g*0.92+d[p*4+1]*0.08; d[p*4+2]=b*0.92+d[p*4+2]*0.08; } }
+  // 2) material
+  const mat=o.material;
+  if(mat){
+    const tint={gold:[212,166,60],bronze:[176,110,60],silver:[200,205,212],metal:[150,155,162],wood:[132,86,48],stone:[132,128,120],marble:[226,222,214],ice:[190,225,240],glass:[205,225,235],paper:[238,234,224],neon:null}[mat];
+    for(let p=0;p<N;p++){ if(d[p*4+3]<8) continue; let l=lum(d[p*4],d[p*4+1],d[p*4+2])/255;
+      if(mat==='gold'||mat==='bronze'||mat==='silver'||mat==='metal'){ l=clamp((l-0.5)*1.6+0.5,0,1); const spec=Math.pow(l,6)*0.8; for(let k=0;k<3;k++) d[p*4+k]=clamp(tint[k]*(0.25+1.0*l)+255*spec,0,255); }
+      else if(mat==='wood'){ const grain=0.85+0.15*Math.sin(((p%w)*0.15+Math.sin((p/w)*0.05)*6)); for(let k=0;k<3;k++) d[p*4+k]=tint[k]*(0.45+0.9*l)*grain; }
+      else if(mat==='stone'||mat==='marble'){ const n=(Math.random()-0.5)*(mat==='stone'?40:12); for(let k=0;k<3;k++) d[p*4+k]=clamp(tint[k]*(0.5+0.75*l)+n,0,255); }
+      else if(mat==='paper'){ for(let k=0;k<3;k++) d[p*4+k]=tint[k]*(0.65+0.4*l); }
+      else if(mat==='glass'||mat==='ice'){ for(let k=0;k<3;k++) d[p*4+k]=clamp(tint[k]*(0.6+0.6*l)+255*Math.pow(l,5)*0.7,0,255); }
+      else if(mat==='neon'){ for(let k=0;k<3;k++) d[p*4+k]=clamp(d[p*4+k]*1.4+40,0,255); }
+    }
+  }
+  // 3) relight: fake surface normals from the silhouette (blurred alpha = a rounded "height" map)
+  const A=new Float32Array(N); for(let p=0;p<N;p++) A[p]=d[p*4+3]/255;
+  const Hm=boxBlur(Float32Array.from(A),w,h,Math.max(2,Math.min(w,h)*0.07)); boxBlur(Hm,w,h,Math.max(2,Math.min(w,h)*0.05));
+  const Ab=boxBlur(Float32Array.from(A),w,h,Math.max(1,Math.min(w,h)*0.02));
+  const Lx=scene.light.x, Ly=-scene.light.y, Lz=Math.max(0.15,-scene.light.fwd); const ln=Math.hypot(Lx,Ly,Lz)||1;
+  const k=Math.min(w,h)*0.9, relight=0.25+0.45*scene.light.hard; const night=scene.time==='night';
+  // harmonise: pull object exposure & colour cast towards the scene
+  const tgtL = mL + (bL - mL)*(col?0.18:0.38); const gain=clamp(tgtL/Math.max(mL,1),0.35,1.6);
+  const cm=Math.max(1,(scene.mean[0]+scene.mean[1]+scene.mean[2])/3); const cast=[Math.pow(scene.mean[0]/cm,0.3),Math.pow(scene.mean[1]/cm,0.3),Math.pow(scene.mean[2]/cm,0.3)];
+  // haze by distance (Koschmieder): far things fade into the horizon colour
+  const vis={clear:2500,haze:500,fog:45,rain:260,snow:180}[scene.weather]||2500; const hz=place.sky?0:clamp(1-Math.exp(-place.z/vis),0,0.92);
+  const wrapCol=[br,bg,bb];
+  for(let y=0;y<h;y++) for(let xx=0;xx<w;xx++){ const p=y*w+xx; if(d[p*4+3]<4) continue;
+    const gx=(Hm[y*w+clamp(xx+1,0,w-1)]-Hm[y*w+clamp(xx-1,0,w-1)])*k*0.5, gy=(Hm[clamp(y+1,0,h-1)*w+xx]-Hm[clamp(y-1,0,h-1)*w+xx])*k*0.5;
+    const nx=-gx, ny=-gy, nz=1; const nn=Math.hypot(nx,ny,nz); const dot=(nx*Lx+ny*Ly+nz*Lz)/(nn*ln);
+    const shade=1+relight*(clamp(dot,0,1)*1.15-0.55);
+    const edge=clamp((A[p]-Ab[p])*4+ (1-Ab[p])*0.8,0,1)*0.45; // rim pixels pick up the backdrop (light wrap)
+    for(let k2=0;k2<3;k2++){ let v=d[p*4+k2]*gain*cast[k2]*shade; if(night) v*= k2===2?0.95:0.82; v=v*(1-edge)+wrapCol[k2]*edge; v=v*(1-hz)+scene.hazeCol[k2]*hz; d[p*4+k2]=clamp(v,0,255); }
+    if(mat==='glass'||mat==='ice'){ const rim=clamp((1-Ab[p])*3,0,1); d[p*4+3]=d[p*4+3]*(0.38+0.55*rim); }
+  }
+  x.putImageData(img,0,0);
+  return c;
+}
+
+// ---------- Compose one variant ----------
+function silhouette(sp){ const c=mk(sp.width,sp.height), x=c.getContext('2d'); x.drawImage(sp,0,0); x.globalCompositeOperation='source-in'; x.fillStyle='#000'; x.fillRect(0,0,c.width,c.height); return c; }
+function compose(plan, bg, choice, variant, opt={}){
+  const rng=seeded(1234+variant*7919+(opt.seedBump||0));
+  const {canvas:bgc, scene}=prepareBackground(bg, plan, variant, rng);
+  const aspects=plan.objects.map((o,g)=>{ const c=choice[g]; return c? c.canvas.width/c.canvas.height : 1; });
+  const L=solveLayout(plan, aspects, W, H, scene, rng);
+  if(opt.scaleBoost) L.inst.forEach(I=>{ const b=opt.scaleBoost[I.g]; if(b){ I.hpx*=b; I.wpx*=b; } });
+  const out=mk(W,H), x=out.getContext('2d'); const mask=mk(W,H), mx=mask.getContext('2d');
+  // depth of field: background softness depends on focus distance
+  const dof=(z)=> clamp(2.2*Math.abs(1-L.zFocus/Math.max(z,0.01)),0,5);
+  x.filter=`blur(${dof(1e6).toFixed(1)}px)`; x.drawImage(bgc,0,0); x.filter='none';
+  const lt=scene.light; const tanEl=Math.tan(clamp(lt.el,0.12,1.4));
+  for(const I of L.inst){
+    const cand=choice[I.g]; const o=plan.objects[I.g];
+    if(!cand){ continue; }
+    const h=I.hpx, w=h*(cand.canvas.width/cand.canvas.height);
+    const left= I.sky? I.x-w/2 : I.x-w/2, top= I.sky? I.y-h/2 : I.baseY-h;
+    if(left>W||left+w<0||top>H||top+h<-H) continue;
+    const sp=processSprite(cand.canvas, w, h, o, scene, {left,top,z:I.z,sky:I.sky}, bgc);
+    // shadows: projected silhouette, physically derived from sun direction and camera height
+    if(!I.sky && !scene.noGround){
+      const sil=silhouette(sp); const by=I.baseY; const lift=I.flying? Math.max(0,(L.hz + L.f*L.camH/I.z) - by) : 0; const gy=by+lift;
+      if(lt.hard>0.18 && lift<H*0.4){
+        let a=-Math.sin(lt.rel)/tanEl, b=Math.cos(lt.rel)*(L.camH/I.z)/tanEl; a=clamp(a,-2.5,2.5); if(Math.abs(b)<0.05) b=0.05*Math.sign(b||1); b=clamp(b,-0.9,0.9);
+        x.save(); x.globalAlpha=clamp(0.62*lt.hard,0,0.6)*(I.flying?0.5:1); x.filter=`blur(${(1.5+h*0.012+lift*0.03).toFixed(1)}px)`;
+        x.setTransform(1,0,-a,-b,a*by,gy+ b*by); x.drawImage(sil,left,top,w,h); x.restore();
+      }
+      // contact / ambient-occlusion shadow
+      if(!I.flying || lift<h*0.6){ x.save(); const rw=w*0.42, rh=Math.max(2,w*0.06); const g=x.createRadialGradient(I.x,gy,1,I.x,gy,rw); g.addColorStop(0,`rgba(0,0,0,${I.flying?0.18:0.5})`); g.addColorStop(1,'rgba(0,0,0,0)'); x.translate(I.x,gy); x.scale(1,rh/rw); x.translate(-I.x,-gy); x.fillStyle=g; x.beginPath(); x.arc(I.x,gy,rw,0,Math.PI*2); x.fill(); x.restore(); }
+    }
+    x.save();
+    const blur=I.sky?0:dof(I.z); if(blur>0.4) x.filter=`blur(${blur.toFixed(1)}px)`;
+    if(o.material==='neon'){ x.shadowColor= o.color&&COLORS[o.color]? `rgb(${COLORS[o.color].join(',')})` : '#ff4fd8'; x.shadowBlur=h*0.15; }
+    if(I.sky && (o.name==='moon'||o.name==='sun'||o.name==='planet')) x.globalCompositeOperation='screen';
+    x.drawImage(sp,left,top,w,h); x.restore();
+    mx.drawImage(sp,left,top,w,h);
+  }
+  weather(x, scene, rng);
+  cameraPass(x, scene, rng);
+  return {canvas:out, mask, layout:L, scene};
+}
+function weather(x, scene, rng){
+  const hz=scene.horizon*H, hc=scene.hazeCol.map(v=>v|0).join(',');
+  if(scene.weather==='fog'||scene.weather==='haze'){ const g=x.createLinearGradient(0,0,0,H); const a=scene.weather==='fog'?0.42:0.18; g.addColorStop(0,`rgba(${hc},${a*0.6})`); g.addColorStop(clamp(scene.horizon,0.05,0.95),`rgba(${hc},${a})`); g.addColorStop(1,`rgba(${hc},${a*0.35})`); x.fillStyle=g; x.fillRect(0,0,W,H); }
+  if(scene.weather==='rain'){ x.save(); x.strokeStyle='rgba(220,230,240,.22)'; x.lineWidth=1; for(let i=0;i<700;i++){ const px=rng()*W, py=rng()*H, l=8+rng()*16; x.beginPath(); x.moveTo(px,py); x.lineTo(px-l*0.18,py+l); x.stroke(); } x.restore(); }
+  if(scene.weather==='snow'){ x.save(); for(let i=0;i<600;i++){ const r=rng()**2*2.6+0.4; x.fillStyle=`rgba(255,255,255,${0.35+0.5*rng()})`; x.beginPath(); x.arc(rng()*W,rng()*H,r,0,Math.PI*2); x.fill(); } x.restore(); }
+}
+function cameraPass(x, scene, rng){
+  const img=x.getImageData(0,0,W,H), d=img.data; const night=scene.time==='night';
+  const grain= night?11:6;
+  for(let y=0;y<H;y++){ const vy=(y/H-0.5); for(let xx=0;xx<W;xx++){ const i=(y*W+xx)*4; const vx=(xx/W-0.5); const vig=1-0.32*Math.pow(vx*vx+vy*vy,1.1)*2.2; const n=(rng()-0.5)*grain;
+    for(let k=0;k<3;k++){ let v=d[i+k]/255; v=v+(v-0.5)*0.08 - 0.08*v*(1-v)*(v-0.5); d[i+k]=clamp(v*255*vig+n,0,255); } } }
+  x.putImageData(img,0,0);
+}
+
+// ---------- Checks: local self-check + optional vision model ----------
+function downscaleJPEG(c, maxW=512){ const s=maxW/c.width; const t=mk(c.width*s,c.height*s); t.getContext('2d').drawImage(c,0,0,t.width,t.height); return t.toDataURL('image/jpeg',0.82); }
+async function scoreVariant(plan, checklist, v, useVision){
+  const local=verifyLayout(plan, v.layout, W, H);
+  v.checks=checklist.map(c=>{ const m=local.find(l=>l.kind===c.kind && (c.rel? l.rel===c.rel : l.g===c.g)); return {...c, local: m? m.ok : null, vision:null}; });
+  if(useVision){
+    try{ const r=await workerPost('/vision',{image:downscaleJPEG(v.canvas),questions:checklist.map(c=>c.q)}); (r.answers||[]).forEach((a,i)=>{ if(v.checks[i]) v.checks[i].vision=!!a; }); v.visionModel=r.model; }
+    catch(e){ v.visionErr=e; }
+  }
+  let s=0,n=0; v.checks.forEach(c=>{ const val= c.vision!=null? (c.local===false? (c.vision?0.5:0) : (c.vision?1:0)) : (c.local!=null? (c.local?1:0) : null); c.verdict=val; if(val!=null){ s+=val; n++; } });
+  v.score = n? s/n : 0.5;
+  v.rank = v.score + 0.04*(v.quality||0); // small tie-breaker for cleaner cutouts
+  return v;
+}
+
+// ---------- Polish: one light img2img pass, then keep the photo's detail and protect the prompt's key objects ----------
+async function polishVariant(plan, prompt, v){
+  const sw=576, sh=384; const t=mk(sw,sh); t.getContext('2d').drawImage(v.canvas,0,0,sw,sh);
+  const blob=await workerPost('/polish',{image:t.toDataURL('image/png'),prompt,strength:cfg.pstr},'blob');
+  const bmp=await createImageBitmap(blob);
+  const up=mk(W,H), ux=ctx2(up); ux.imageSmoothingQuality='high'; ux.drawImage(bmp,0,0,W,H);
+  const blur=mk(W,H), bx=ctx2(blur); bx.filter='blur(2.2px)'; bx.drawImage(v.canvas,0,0); bx.filter='none';
+  const P=ux.getImageData(0,0,W,H), O=ctx2(v.canvas).getImageData(0,0,W,H).data, B=bx.getImageData(0,0,W,H).data, M=ctx2(v.mask).getImageData(0,0,W,H).data;
+  const pd=P.data; const protectAll = plan.objects.some(o=>o.color||o.material) ? 0.55 : 0.35;
+  for(let i=0;i<pd.length;i+=4){ const m=M[i+3]/255*protectAll; for(let k=0;k<3;k++){ const detail=O[i+k]-B[i+k]; let val=pd[i+k]+detail*0.85; val=val*(1-m)+O[i+k]*m; pd[i+k]=clamp(val,0,255); } }
+  const out=mk(W,H); out.getContext('2d').putImageData(P,0,0);
+  return out;
+}
+
+// ---------- UI rendering ----------
+function showChecks(v){
+  if(!v||!v.checks){ $('checks').textContent='–'; $('score').textContent='–'; return; }
+  $('score').textContent=Math.round(clamp(v.score,0,1)*100)+'%';
+  $('checks').innerHTML=v.checks.map(c=>{ const cls=c.verdict==null?'unk':c.verdict>=0.75?'yes':c.verdict>0?'unk':'no'; const sym=c.verdict==null?'?':c.verdict>=0.75?'✓':c.verdict>0?'~':'✕'; const src=c.vision!=null?'vision':c.local!=null?'layout':'unchecked'; return `<div class="check ${cls}"><b>${sym}</b><span>${c.q} <span class="hint">(${src})</span></span></div>`; }).join('');
+}
+function showCredits(){
+  const items=[...credits.values()];
+  const ph=items.some(i=>/Poly Haven/.test(i.author||''));
+  $('credits').innerHTML='<strong>Image credits</strong><br>'+(items.length? items.map(i=>`<a href="${i.page||'#'}" target="_blank" rel="noopener">${(i.title||'image').replace(/</g,'&lt;').slice(0,60)}</a> — ${(i.author||'unknown').replace(/</g,'&lt;')} · ${i.license||'see source'}`).join('<br>') : 'none yet')+(ph?'<br>Backgrounds powered by Poly Haven.':'');
+}
+let current=null;
+function showVariant(v, all){
+  current=v; const o=$('out').getContext('2d'); o.drawImage(v.final||v.canvas,0,0); $('empty').style.display='none'; $('dl').disabled=false; showChecks(v);
+  if(all){ $('thumbs').innerHTML=''; all.forEach(a=>{ const t=mk(192,128); t.getContext('2d').drawImage(a.final||a.canvas,0,0,192,128); if(a===v) t.className='sel'; t.title=Math.round(a.score*100)+'%'; t.onclick=()=>{ showVariant(a,all); }; $('thumbs').appendChild(t); }); }
+}
+
+// ---------- Main pipeline ----------
+let busy=false;
+async function run(){
+  if(busy) return; const prompt=$('prompt').value.trim();
+  if(!prompt){ toast('Type a description first.','err'); return; }
+  busy=true; $('go').disabled=true; $('go').textContent='Assembling…'; resetSteps(); credits.clear();
+  const hasW=!!workerURL(); const t0=performance.now();
+  try{
+    // 1 plan
+    step(0,'run'); let plan;
+    if(hasW){ try{ const r=await workerPost('/plan',{prompt}); plan=normalizePlan(r.plan,prompt); step(0,'done','Workers AI ('+String(r.model||'').split('/').pop()+')'); }
+      catch(e){ plan=parsePrompt(prompt); step(0,'done','built-in parser'); toast((e.status===429?'Daily AI allowance used up':'AI planner failed: '+e.message)+' — using the built-in parser.','err'); } }
+    else { plan=parsePrompt(prompt); step(0,'done','built-in parser'); }
+    if(!plan.objects.length){ step(0,'fail','no objects found'); throw new Error('I could not find any objects in that description. Try naming a thing, e.g. "a fox in a snowy forest".'); }
+    $('planView').textContent=JSON.stringify(plan,null,1);
+    const checklist=buildChecklist(plan);
+    $('checks').innerHTML=checklist.map(c=>`<div class="check unk"><b>·</b><span>${c.q}</span></div>`).join('');
+    // 2 + 3 in parallel
+    step(1,'run'); step(2,'run');
+    const bgP=findBackground(plan).then(b=>{ step(1, b.kind==='procedural'?'fail':'done', b.kind==='list'? (b.opts[0].kind==='hdri'?'360° photo: '+(b.opts[0].name||b.opts[0].id):'photo') : b.kind); return b; });
+    const cutP=Promise.all(plan.objects.map(o=>findCutouts(o,3).catch(e=>{ toast('Search failed for '+o.name+': '+e.message,'err'); return []; })));
+    const [bg, cands]=await Promise.all([bgP,cutP]);
+    const missing=plan.objects.filter((o,g)=>!cands[g].length).map(o=>o.name);
+    step(2, missing.length===plan.objects.length?'fail':'done', missing.length? 'none found for: '+missing.join(', ') : cands.map((c,g)=>plan.objects[g].name+'×'+c.length).join(', '));
+    if(missing.length) toast('No usable photo cutouts found for: '+missing.join(', ')+'. Try a more common word for it.','err',7000);
+    if(missing.length===plan.objects.length) throw new Error('Nothing to assemble yet.');
+    cands.forEach(list=>list.forEach(c=>credit(c.url,c)));
+    // 4 + 5 variants
+    step(3,'run'); step(4,'run');
+    const nv=cfg.nvar; const variants=[];
+    for(let v=0;v<nv;v++){
+      const choice=cands.map(list=>list.length? list[v%list.length]:null);
+      const res=compose(plan,bg,choice,v); res.choice=choice; res.variant=v; res.quality=choice.reduce((s,c)=>s+(c?c.quality:0),0)/choice.length;
+      variants.push(res); await new Promise(r=>setTimeout(r,0));
+      if(v===0) showVariant(res);
+    }
+    step(3,'done',nv+' arrangements'); step(4,'done');
+    // 6 checks
+    step(5,'run'); const useV=hasW&&cfg.useVision;
+    for(const v of variants){ await scoreVariant(plan,checklist,v,useV); }
+    const vErr=variants.find(v=>v.visionErr);
+    if(vErr) toast('Vision check failed ('+vErr.visionErr.message+') — scoring by layout only.','err');
+    variants.sort((a,b)=>b.rank-a.rank); let best=variants[0];
+    step(5,'done', (useV&&!vErr?'vision + layout':'layout self-check')+' · best '+Math.round(best.score*100)+'%');
+    showVariant(best,variants);
+    // 7 repair: swap cutouts / enlarge objects that failed
+    step(6,'run');
+    const fails=best.checks.filter(c=>c.verdict!=null && c.verdict<0.75 && c.g!=null);
+    if(fails.length && best.score<0.999){
+      const choice=[...best.choice]; const boost={};
+      fails.forEach(f=>{ const list=cands[f.g]; if(f.kind==='presence'||f.kind==='count') boost[f.g]=1.3; if(list.length>1){ const idx=list.indexOf(choice[f.g]); choice[f.g]=list[(idx+1)%list.length]; } });
+      const r=compose(plan,bg,choice,best.variant,{scaleBoost:boost,seedBump:17}); r.choice=choice; r.variant=best.variant; r.quality=best.quality;
+      await scoreVariant(plan,checklist,r,useV);
+      if(r.rank>best.rank){ variants.unshift(r); best=r; step(6,'done','improved to '+Math.round(r.score*100)+'%'); } else step(6,'done','kept original (repair did not score higher)');
+      showVariant(best,variants);
+    } else step(6,'done','nothing to repair');
+    // 8 polish
+    if(hasW&&cfg.usePolish){
+      step(7,'run');
+      try{
+        const pol=await polishVariant(plan,prompt,best);
+        const test={...best, canvas:pol}; await scoreVariant(plan,checklist,test,useV);
+        if(test.score+0.001>=best.score || !useV){ best.final=pol; best.checks=test.checks; best.score=test.score; step(7,'done','applied (prompt match kept)'); }
+        else step(7,'done','reverted — polish broke a checklist item');
+        showVariant(best,variants);
+      }catch(e){ step(7,'fail',e.message); toast('Polish pass skipped: '+e.message,'err'); }
+    } else step(7,'done', hasW?'off':'needs the Worker');
+    // learn: remember the winning cutouts
+    best.choice.forEach((c,g)=>{ if(c) libWin(plan.objects[g].search||plan.objects[g].name,c); });
+    showCredits();
+    toast('Done in '+((performance.now()-t0)/1000).toFixed(1)+'s — prompt match '+Math.round(best.score*100)+'%','ok');
+  }catch(e){
+    toast(e.message||String(e),'err',8000); console.error(e);
+  }finally{ busy=false; $('go').disabled=false; $('go').textContent='Assemble'; }
+}
+
+// ---------- wiring ----------
+const EX=['two red umbrellas left of a yellow bicycle in fog','a glass whale floating in a cathedral','a golden fox in a snowy forest at sunset','a black cat on a wooden table in a library','three hot air balloons over a lake at sunrise','a marble horse next to a lighthouse at night'];
+$('examples').innerHTML=EX.map(e=>`<button class="chip">${e}</button>`).join('');
+$('examples').onclick=e=>{ if(e.target.classList.contains('chip')){ $('prompt').value=e.target.textContent; } };
+$('go').onclick=run;
+$('prompt').addEventListener('keydown',e=>{ if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)) run(); });
+$('dl').onclick=()=>{ if(!current) return; const c=current.final||current.canvas; c.toBlob(b=>{ const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download='assemblage-'+Date.now()+'.jpg'; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),4000); toast('Saved.','ok'); },'image/jpeg',0.92); };
+function syncCfg(){ $('wurl').value=cfg.worker; $('nvar').value=cfg.nvar; $('nvarV').textContent=cfg.nvar; $('pstr').value=Math.round(cfg.pstr*100); $('pstrV').textContent=cfg.pstr.toFixed(2); $('useVision').checked=cfg.useVision; $('usePolish').checked=cfg.usePolish; $('hdBg').checked=cfg.hdBg; }
+function saveCfg(){ cfg.worker=$('wurl').value.trim(); cfg.nvar=+$('nvar').value; cfg.pstr=+$('pstr').value/100; cfg.useVision=$('useVision').checked; cfg.usePolish=$('usePolish').checked; cfg.hdBg=$('hdBg').checked; LS.set('assemblage.cfg',cfg); $('nvarV').textContent=cfg.nvar; $('pstrV').textContent=cfg.pstr.toFixed(2); }
+['wurl','nvar','pstr','useVision','usePolish','hdBg'].forEach(id=>$(id).addEventListener('input',saveCfg));
+$('gearBtn').onclick=()=>{ syncCfg(); $('settings').showModal(); };
+$('settings').addEventListener('close',()=>{ saveCfg(); toast(workerURL()?'Settings saved — Worker on.':'Settings saved — running without the Worker.'); });
+$('testW').onclick=async()=>{ saveCfg(); if(!workerURL()){ toast('Enter the Worker URL first.','err'); return; } try{ const r=await fetch(workerURL()+'/status'); const j=await r.json(); toast(j.ai? 'Worker OK'+(j.used!=null?` — ${j.used}/${j.cap} AI calls used today`:' (no daily cap: KV not bound)') : 'Worker reached, but the AI binding is missing.', j.ai?'ok':'err',6000); }catch(e){ toast('Could not reach the Worker: '+e.message,'err'); } };
+$('clearLib').onclick=()=>{ LS.set('assemblage.lib',{}); toast('Learned library cleared.','ok'); };
+resetSteps();
+</script>
+</body>
+</html>
