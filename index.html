@@ -82,7 +82,7 @@ dialog input[type=text],dialog input[type=url]{width:100%;padding:10px;backgroun
   <div class="card">
     <details><summary>Scene plan, layout guide &amp; prompt</summary><canvas id="guideView" width="504" height="336" style="width:100%;border-radius:8px;margin-top:8px"></canvas><pre id="promptView">–</pre><pre id="planView">–</pre></details>
   </div>
-  <div class="card credits" id="credits">Rendered with FLUX.2 [klein] and checked with a vision model, both on Cloudflare Workers AI through your Worker.</div>
+  <div class="card credits" id="credits">Rendered with FLUX.2 (model chosen in ⚙︎) and checked with a vision model, both on Cloudflare Workers AI through your Worker.</div>
 </main>
 <div id="toasts"></div>
 
@@ -92,6 +92,13 @@ dialog input[type=text],dialog input[type=url]{width:100%;padding:10px;backgroun
     <label for="wurl">Worker URL (required)</label>
     <input type="url" id="wurl" placeholder="https://assemblage.yourname.workers.dev">
     <div class="hint">Rendering, planning and checking all run on your Cloudflare Worker (Workers AI free allowance).</div>
+    <label for="model">Image model</label>
+    <select id="model" style="width:100%;padding:10px;background:#0f0d0b;color:var(--ink);border:1px solid var(--line);border-radius:8px;font-size:15px">
+      <option value="klein-4b">FLUX.2 [klein] 4B — fastest, lowest cost (default)</option>
+      <option value="klein-9b">FLUX.2 [klein] 9B — sharper, a bit slower</option>
+      <option value="dev">FLUX.2 [dev] — higher quality, uses much more of the daily allowance</option>
+      <option value="max">FLUX.2 [max] — best quality, third-party pricing (may not work on the free plan)</option>
+    </select>
     <div class="grid2">
       <div><label for="nvar">Variations</label><input type="range" id="nvar" min="1" max="4" value="3"><span class="hint" id="nvarV">3</span></div>
       <div><label for="nrep">Repair rounds</label><input type="range" id="nrep" min="0" max="3" value="2"><span class="hint" id="nrepV">2</span></div>
@@ -450,7 +457,7 @@ const $=id=>document.getElementById(id);
 const W=1024, H=688;           // render size (multiple of 16)
 const GW=504, GH=336;          // guide / edit input size (< 512x512 required by FLUX.2 klein)
 const LS={get:(k,d)=>{try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v);}catch{return d;}},set:(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v));}catch{}}};
-const cfg = Object.assign({worker:'',nvar:3,nrep:2,useGuide:false,useVision:true}, LS.get('assemblage.cfg',{}));
+const cfg = Object.assign({worker:'',nvar:3,nrep:2,useGuide:false,useVision:true,model:'klein-4b'}, LS.get('assemblage.cfg',{}));
 if(!LS.get('assemblage.v4',false)){ cfg.useGuide=false; LS.set('assemblage.v4',true); LS.set('assemblage.cfg',cfg); }
 if(cfg.nvar>4) cfg.nvar=3;
 const workerURL=()=> (cfg.worker||'').replace(/\/+$/,'');
@@ -494,7 +501,8 @@ function drawGuide(plan, L, scene){
 // ---------- Rendering and checking ----------
 async function render(prompt, seed, guideURL, editURL){
   const t0=performance.now();
-  const blob=await workerPost('/render',{prompt,seed,w:W,h:H,guide:editURL?undefined:guideURL,image:editURL},'blob');
+  const model = editURL && cfg.model==='max' ? 'klein-4b' : cfg.model; // repairs on [max] use klein's edit mode
+  const blob=await workerPost('/render',{prompt,seed,w:W,h:H,model,guide:editURL?undefined:guideURL,image:editURL},'blob');
   const bmp=await createImageBitmap(blob);
   return {bmp, blob, ms:performance.now()-t0};
 }
@@ -561,9 +569,9 @@ async function run(){
     const res=await Promise.allSettled(jobs.map(j=>render(j.guided?pGuided:pText,j.seed,j.guided?guideURL:null).then(r=>{ done++; step(2,'run',done+'/'+jobs.length); const v={...j,...r}; if(!current||done===1) showVariant(v); return v; })));
     const variants=res.filter(r=>r.status==='fulfilled').map(r=>r.value);
     const fail=res.find(r=>r.status==='rejected');
-    if(!variants.length) throw new Error('Rendering failed: '+(fail&&fail.reason&&fail.reason.message));
+    if(!variants.length) throw new Error('Rendering failed: '+(fail&&fail.reason&&fail.reason.message)+(cfg.model!=='klein-4b'?' — this model may not be available on your plan; switch to FLUX.2 [klein] 4B in ⚙︎.':''));
     if(fail) toast(res.filter(r=>r.status==='rejected').length+' variation(s) failed: '+fail.reason.message,'err');
-    step(2,'done',variants.length+' images · '+(variants.reduce((a,v)=>a+v.ms,0)/variants.length/1000).toFixed(1)+'s each');
+    step(2,'done',$('model').selectedOptions[0].text.split(' —')[0]+' · '+variants.length+' images · '+(variants.reduce((a,v)=>a+v.ms,0)/variants.length/1000).toFixed(1)+'s each');
     // 4 check
     step(3,'run');
     await Promise.all(variants.map(v=>score(plan,checklist,v)));
@@ -603,9 +611,9 @@ $('examples').onclick=e=>{ if(e.target.classList.contains('chip')) $('prompt').v
 $('go').onclick=run;
 $('prompt').addEventListener('keydown',e=>{ if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)) run(); });
 $('dl').onclick=()=>{ if(!current) return; const a=document.createElement('a'); a.href=URL.createObjectURL(current.blob); a.download='assemblage-'+Date.now()+'.jpg'; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),4000); toast('Saved.','ok'); };
-function syncCfg(){ $('wurl').value=cfg.worker; $('nvar').value=cfg.nvar; $('nvarV').textContent=cfg.nvar; $('nrep').value=cfg.nrep; $('nrepV').textContent=cfg.nrep; $('useGuide').checked=cfg.useGuide; $('useVision').checked=cfg.useVision; }
-function saveCfg(){ cfg.worker=$('wurl').value.trim(); cfg.nvar=+$('nvar').value; cfg.nrep=+$('nrep').value; cfg.useGuide=$('useGuide').checked; cfg.useVision=$('useVision').checked; LS.set('assemblage.cfg',cfg); $('nvarV').textContent=cfg.nvar; $('nrepV').textContent=cfg.nrep; }
-['wurl','nvar','nrep','useGuide','useVision'].forEach(id=>$(id).addEventListener('input',saveCfg));
+function syncCfg(){ $('model').value=cfg.model; $('wurl').value=cfg.worker; $('nvar').value=cfg.nvar; $('nvarV').textContent=cfg.nvar; $('nrep').value=cfg.nrep; $('nrepV').textContent=cfg.nrep; $('useGuide').checked=cfg.useGuide; $('useVision').checked=cfg.useVision; }
+function saveCfg(){ cfg.model=$('model').value; cfg.worker=$('wurl').value.trim(); cfg.nvar=+$('nvar').value; cfg.nrep=+$('nrep').value; cfg.useGuide=$('useGuide').checked; cfg.useVision=$('useVision').checked; LS.set('assemblage.cfg',cfg); $('nvarV').textContent=cfg.nvar; $('nrepV').textContent=cfg.nrep; }
+['wurl','nvar','nrep','useGuide','useVision','model'].forEach(id=>$(id).addEventListener('input',saveCfg));
 $('gearBtn').onclick=()=>{ syncCfg(); $('settings').showModal(); };
 $('settings').addEventListener('close',()=>{ saveCfg(); toast(workerURL()?'Settings saved.':'Settings saved — add the Worker URL to render.'); });
 $('testW').onclick=async()=>{ saveCfg(); if(!workerURL()){ toast('Enter the Worker URL first.','err'); return; }

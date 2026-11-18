@@ -26,8 +26,15 @@ const MODELS = {
     '@cf/meta/llama-4-scout-17b-16e-instruct',
     '@cf/meta/llama-3.2-11b-vision-instruct',
   ],
-  // FLUX.2 [klein]: fast distilled generator; multipart input, input images must be < 512x512
-  render: ['@cf/black-forest-labs/flux-2-klein-4b', '@cf/black-forest-labs/flux-2-klein-9b'],
+  // Image models the app can choose from. multipart = Cloudflare-hosted FLUX.2 (input images < 512x512).
+  render: {
+    'klein-4b': { id: '@cf/black-forest-labs/flux-2-klein-4b', kind: 'multipart' },
+    'klein-9b': { id: '@cf/black-forest-labs/flux-2-klein-9b', kind: 'multipart' },
+    'dev':      { id: '@cf/black-forest-labs/flux-2-dev',      kind: 'multipart' },
+    // Third-party model: pricing is set in the Cloudflare dashboard. On the free Workers plan a request
+    // that isn't covered fails instead of billing. Most permissive moderation setting, as requested.
+    'max':      { id: 'black-forest-labs/flux-2-max',          kind: 'json', safety_tolerance: 5 },
+  },
 };
 
 const PLAN_SYSTEM = `You turn an image prompt into a JSON scene plan for a photo-collage engine.
@@ -186,29 +193,47 @@ function b64ToBytes(b64) {
   return out;
 }
 
+async function bytesFrom(r) {
+  if (r instanceof ReadableStream) return new Uint8Array(await new Response(r).arrayBuffer());
+  if (r instanceof ArrayBuffer) return new Uint8Array(r);
+  if (r instanceof Uint8Array) return r;
+  const v = r && (r.image || (r.result && r.result.image) || (Array.isArray(r.images) && r.images[0]) || r.output || r.url);
+  if (!v) throw new Error('no image in reply: ' + JSON.stringify(r).slice(0, 120));
+  const str = String(v);
+  if (/^https?:\/\//.test(str)) { const f = await fetch(str); if (!f.ok) throw new Error('image download ' + f.status); return new Uint8Array(await f.arrayBuffer()); }
+  return b64ToBytes(str.replace(/^data:[^,]+,/, ''));
+}
+
 async function render(env, body) {
   const prompt = String(body.prompt || '').slice(0, 1800);
   if (!prompt) throw new Error('prompt required');
+  const key = MODELS.render[body.model] ? body.model : 'klein-4b';
+  const m = MODELS.render[key];
   const w = Math.min(1280, Math.max(256, (parseInt(body.w, 10) || 1024) & ~15));
   const h = Math.min(1280, Math.max(256, (parseInt(body.h, 10) || 688) & ~15));
   const img = body.image || body.guide; // edit source or layout guide (< 512x512 JPEG data URL)
+  const seed = body.seed != null ? (parseInt(body.seed, 10) >>> 0) : undefined;
   let lastErr;
-  for (const model of MODELS.render) {
-    for (const withSeed of [true, false]) {
-      try {
+  for (const withSeed of [true, false]) {
+    try {
+      let r;
+      if (m.kind === 'multipart') {
         const form = new FormData();
         form.append('prompt', prompt);
         form.append('width', String(w));
         form.append('height', String(h));
-        if (withSeed && body.seed != null) form.append('seed', String(parseInt(body.seed, 10) >>> 0));
+        if (withSeed && seed != null) form.append('seed', String(seed));
         if (img) form.append('input_image_0', new Blob([dataURLtoBytes(img)], { type: 'image/jpeg' }), 'input.jpg');
         const fr = new Response(form);
-        const r = await env.AI.run(model, { multipart: { body: fr.body, contentType: fr.headers.get('content-type') } });
-        const b64 = r && (r.image || (r.result && r.result.image));
-        if (!b64) throw new Error('no image in reply');
-        return { bytes: b64ToBytes(String(b64).replace(/^data:[^,]+,/, '')), type: 'image/jpeg', model };
-      } catch (e) { lastErr = e; if (!/seed/i.test(String(e.message))) break; }
-    }
+        r = await env.AI.run(m.id, { multipart: { body: fr.body, contentType: fr.headers.get('content-type') } });
+      } else {
+        const input = { prompt, width: w, height: h, output_format: 'jpeg', safety_tolerance: m.safety_tolerance };
+        if (withSeed && seed != null) input.seed = seed;
+        if (img) input.image = img;
+        r = await env.AI.run(m.id, input);
+      }
+      return { bytes: await bytesFrom(r), type: 'image/jpeg', model: m.id };
+    } catch (e) { lastErr = e; if (!/seed/i.test(String(e.message))) break; }
   }
-  throw new Error('Render failed: ' + (lastErr && lastErr.message));
+  throw new Error(`${key} failed: ` + (lastErr && lastErr.message));
 }
