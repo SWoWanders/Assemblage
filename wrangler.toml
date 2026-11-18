@@ -5,11 +5,11 @@ compatibility_date = "2026-11-01"
 [ai]
 binding = "AI"
 
-# Optional daily spend cap: create a KV namespace and paste its id here.
+# Daily neuron cap: create a KV namespace and paste its id here (makes the cap exact).
 # [[kv_namespaces]]
 # binding = "LIMITS"
 # id = "PASTE_KV_ID"
 
 [vars]
-DAILY_CAP = "300"
+NEURON_BUDGET = "9000"
 ALLOWED_ORIGINS = "https://swowanders.github.io"

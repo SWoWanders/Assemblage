@@ -7,9 +7,10 @@
 //
 // Bindings (wrangler.toml / dashboard):
 //   AI      — Workers AI binding (required)
-//   LIMITS  — KV namespace (optional, enables the daily spend cap)
+//   LIMITS  — KV namespace (strongly recommended: makes the daily neuron cap exact and persistent)
 // Vars:
-//   DAILY_CAP        — max AI calls per day across all visitors (default 300)
+//   NEURON_BUDGET    — neurons this Worker may spend per day (default 9000 of the free 10,000, leaving headroom
+//                      for estimate error and your other Workers AI apps). Resets 00:00 UTC.
 //   ALLOWED_ORIGINS  — comma list, e.g. "https://swowanders.github.io" (default "*")
 
 const MODELS = {
@@ -28,11 +29,13 @@ const MODELS = {
   ],
   // Image models the app can choose from. multipart = Cloudflare-hosted FLUX.2 (input images < 512x512).
   render: {
-    'klein-4b': { id: '@cf/black-forest-labs/flux-2-klein-4b', kind: 'multipart' },
-    'schnell':  { id: '@cf/black-forest-labs/flux-1-schnell',  kind: 'schnell' },
-    'klein-9b': { id: '@cf/black-forest-labs/flux-2-klein-9b', kind: 'multipart' },
-    'dev':      { id: '@cf/black-forest-labs/flux-2-dev',      kind: 'multipart' },
+    'klein-4b': { id: '@cf/black-forest-labs/flux-2-klein-4b', kind: 'multipart', neurons: 110 },  // 4 tiles x 26.05
+    'schnell':  { id: '@cf/black-forest-labs/flux-1-schnell',  kind: 'schnell', neurons: 60 },     // 4 tiles x 4.8 + 4 steps x 9.6
+    'klein-9b': { id: '@cf/black-forest-labs/flux-2-klein-9b', kind: 'multipart', neurons: 1400 }, // 1363.64 per first MP
+    'dev':      { id: '@cf/black-forest-labs/flux-2-dev',      kind: 'multipart', neurons: 4000, steps: 25 }, // 4 tiles x 37.5 x 25 steps
     // Only Cloudflare-hosted models: they draw from the free daily Neuron allowance.
+    // Content filters: none of these four exposes a moderation setting. If a model with one is added,
+    // give it safetySetting: { name: 'safety_tolerance', leastRestrictive: 5 } and it is applied automatically.
     // "Third-party" models (e.g. FLUX.2 [max]) are billed in dollars and are deliberately not listed.
   },
 };
@@ -65,22 +68,38 @@ export default {
 
     try {
       if (url.pathname === '/status') {
-        const used = await getUsed(env);
-        return json({ ok: true, used, cap: cap(env), ai: !!env.AI });
+        const used = await getUsed(env), budget = budgetOf(env), left = Math.max(0, budget - used);
+        const rendersLeft = {};
+        for (const [k, m] of Object.entries(MODELS.render)) rendersLeft[k] = Math.floor(left / m.neurons);
+        return json({ ok: true, ai: !!env.AI, neuronsUsed: Math.round(used), neuronBudget: budget, rendersLeft, persistentCap: !!env.LIMITS, resetsAtUTC: '00:00' });
       }
       if (!env.AI) return json({ error: 'Workers AI binding "AI" is missing on this Worker.' }, 500);
       if (request.method !== 'POST') return json({ error: 'Use POST' }, 405);
 
-      // Daily spend cap (only if KV bound)
-      if (!(await takeQuota(env))) return json({ error: 'Daily AI allowance used up — the app will fall back to its offline modes.', capped: true }, 429);
-
       const body = await request.json();
-      if (url.pathname === '/plan') return json(await plan(env, String(body.prompt || '').slice(0, 600)));
-      if (url.pathname === '/vision') return json(await vision(env, body.image, (body.questions || []).slice(0, 16)));
-      if (url.pathname === '/render') {
-        const out = await render(env, body);
-        return new Response(out.bytes, { headers: { ...cors, 'Content-Type': out.type, 'X-Model': out.model } });
+      // Estimate this call's cost and refuse it if it would pass today's budget.
+      let cost = 0, label = '';
+      if (url.pathname === '/plan') { cost = COST.plan; label = 'planning'; }
+      else if (url.pathname === '/vision') { cost = COST.vision; label = 'vision check'; }
+      else if (url.pathname === '/render') {
+        const m = MODELS.render[body.model] || MODELS.render['klein-4b'];
+        cost = m.neurons + ((body.image || body.guide) ? COST.inputImage : 0); label = 'render';
       }
+      if (cost) {
+        const used = await getUsed(env), budget = budgetOf(env);
+        if (used + cost > budget) {
+          return json({ error: `Not enough of today's free AI allowance left for this ${label} (${Math.round(used)} of ${budget} neurons used; it needs about ${cost}). It resets at 00:00 UTC (7 pm Toronto).`, capped: true, neuronsUsed: Math.round(used), neuronBudget: budget }, 429);
+        }
+      }
+
+      let res;
+      if (url.pathname === '/plan') res = json(await plan(env, String(body.prompt || '').slice(0, 600)));
+      else if (url.pathname === '/vision') res = json(await vision(env, body.image, (body.questions || []).slice(0, 16)));
+      else if (url.pathname === '/render') {
+        const out = await render(env, body);
+        res = new Response(out.bytes, { headers: { ...cors, 'Content-Type': out.type, 'X-Model': out.model } });
+      }
+      if (res) { ctx.waitUntil(addUsed(env, cost)); return res; }
       return json({ error: 'Unknown endpoint' }, 404);
     } catch (e) {
       return json({ error: String(e && e.message || e) }, 500);
@@ -88,15 +107,23 @@ export default {
   },
 };
 
-function cap(env) { return parseInt(env.DAILY_CAP || '300', 10); }
-function dayKey() { return 'calls-' + new Date().toISOString().slice(0, 10); }
-async function getUsed(env) { if (!env.LIMITS) return null; return parseInt((await env.LIMITS.get(dayKey())) || '0', 10); }
-async function takeQuota(env) {
-  if (!env.LIMITS) return true;
+// ---- Daily neuron budget ----
+// Estimates from Cloudflare's published per-model rates for a 1024x688 image (4 output tiles).
+// They are deliberately rounded UP so the real spend stays under the budget.
+const COST = { plan: 60, vision: 120, inputImage: 10 };
+function budgetOf(env) { return parseInt(env.NEURON_BUDGET || '9000', 10); }
+function dayKey() { return 'neurons-' + new Date().toISOString().slice(0, 10); }
+const memUsed = {}; // fallback when no KV is bound (per Worker instance only, so not exact)
+async function getUsed(env) {
+  if (!env.LIMITS) return memUsed[dayKey()] || 0;
+  return parseFloat((await env.LIMITS.get(dayKey())) || '0');
+}
+async function addUsed(env, n) {
+  if (!n) return;
+  const k = dayKey();
+  if (!env.LIMITS) { memUsed[k] = (memUsed[k] || 0) + n; return; }
   const used = await getUsed(env);
-  if (used >= cap(env)) return false;
-  await env.LIMITS.put(dayKey(), String(used + 1), { expirationTtl: 60 * 60 * 48 });
-  return true;
+  await env.LIMITS.put(k, String(used + n), { expirationTtl: 60 * 60 * 48 });
 }
 
 function textOf(r) {
@@ -223,6 +250,7 @@ async function render(env, body) {
         form.append('width', String(w));
         form.append('height', String(h));
         if (withSeed && seed != null) form.append('seed', String(seed));
+        if (withSeed && m.steps) form.append('steps', String(m.steps));
         if (img) form.append('input_image_0', new Blob([dataURLtoBytes(img)], { type: 'image/jpeg' }), 'input.jpg');
         const fr = new Response(form);
         r = await env.AI.run(m.id, { multipart: { body: fr.body, contentType: fr.headers.get('content-type') } });
@@ -232,13 +260,14 @@ async function render(env, body) {
         if (withSeed && seed != null) input.seed = seed;
         r = await env.AI.run(m.id, input);
       } else {
-        const input = { prompt, width: w, height: h, output_format: 'jpeg', safety_tolerance: m.safety_tolerance };
+        const input = { prompt, width: w, height: h, output_format: 'jpeg' };
+        if (m.safetySetting) input[m.safetySetting.name] = m.safetySetting.leastRestrictive;
         if (withSeed && seed != null) input.seed = seed;
         if (img) input.image = img;
         r = await env.AI.run(m.id, input);
       }
       return { bytes: await bytesFrom(r), type: 'image/jpeg', model: m.id };
-    } catch (e) { lastErr = e; if (!/seed/i.test(String(e.message))) break; }
+    } catch (e) { lastErr = e; if (!/seed|steps/i.test(String(e.message))) break; }
   }
   throw new Error(`${key} failed: ` + (lastErr && lastErr.message));
 }

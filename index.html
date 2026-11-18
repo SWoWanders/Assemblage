@@ -549,7 +549,7 @@ async function run(){
     // 1 plan
     step(0,'run'); let plan;
     try{ const r=await workerPost('/plan',{prompt}); plan=normalizePlan(r.plan,prompt); step(0,'done',String(r.model||'').split('/').pop()); }
-    catch(e){ if(e.status===429) throw new Error('Daily AI allowance used up — try again tomorrow or raise DAILY_CAP.'); plan=parsePrompt(prompt); step(0,'done','built-in parser'); toast('AI planner failed ('+e.message+') — using the built-in parser.','err'); }
+    catch(e){ if(e.status===429) throw new Error(e.message); plan=parsePrompt(prompt); step(0,'done','built-in parser'); toast('AI planner failed ('+e.message+') — using the built-in parser.','err'); }
     if(!plan.objects.length) throw new Error('I could not find any objects in that description. Try naming a thing, e.g. "a fox in a snowy forest".');
     $('planView').textContent=JSON.stringify(plan,null,1);
     const checklist=buildChecklist(plan);
@@ -571,6 +571,7 @@ async function run(){
     const res=await Promise.allSettled(jobs.map(j=>render(j.guided?pGuided:pText,j.seed,j.guided?guideURL:null).then(r=>{ done++; step(2,'run',done+'/'+jobs.length); const v={...j,...r}; if(!current||done===1) showVariant(v); return v; })));
     const variants=res.filter(r=>r.status==='fulfilled').map(r=>r.value);
     const fail=res.find(r=>r.status==='rejected');
+    if(!variants.length && fail && fail.reason && fail.reason.status===429) throw new Error(fail.reason.message);
     if(!variants.length) throw new Error('Rendering failed: '+(fail&&fail.reason&&fail.reason.message)+(cfg.model!=='klein-4b'?' — this model may not be available on your plan; switch to FLUX.2 [klein] 4B in ⚙︎.':''));
     if(fail) toast(res.filter(r=>r.status==='rejected').length+' variation(s) failed: '+fail.reason.message,'err');
     step(2,'done',$('model').selectedOptions[0].text.split(' —')[0]+' · '+variants.length+' images · '+(variants.reduce((a,v)=>a+v.ms,0)/variants.length/1000).toFixed(1)+'s each');
@@ -596,7 +597,7 @@ async function run(){
         const v={...r,label:'repair '+rounds,guided:false}; await score(plan,checklist,v);
         if(v.score>best.score){ variants.unshift(v); best=v; showVariant(best,variants); }
         else { variants.push(v); }
-      }catch(e){ toast('Repair render failed: '+e.message,'err'); break; }
+      }catch(e){ toast(e.status===429? 'Repairs stopped: '+e.message : 'Repair render failed: '+e.message,'err',8000); break; }
     }
     step(4,'done', rounds? (best.label.startsWith('repair')?'improved to '+Math.round(best.score*100)+'%':'no improvement — kept the best original') : 'nothing to repair');
     showVariant(best,variants);
@@ -619,7 +620,10 @@ function saveCfg(){ cfg.model=$('model').value; cfg.worker=$('wurl').value.trim(
 $('gearBtn').onclick=()=>{ syncCfg(); $('settings').showModal(); };
 $('settings').addEventListener('close',()=>{ saveCfg(); toast(workerURL()?'Settings saved.':'Settings saved — add the Worker URL to render.'); });
 $('testW').onclick=async()=>{ saveCfg(); if(!workerURL()){ toast('Enter the Worker URL first.','err'); return; }
-  try{ const r=await fetch(workerURL()+'/status'); const j=await r.json(); toast(j.ai? 'Worker reached'+(j.used!=null?` — ${j.used}/${j.cap} AI calls used today`:'') : 'Worker reached, but the AI binding is missing.', j.ai?'ok':'err',6000); if(!j.ai) return; }
+  try{ const r=await fetch(workerURL()+'/status'); const j=await r.json();
+    if(!j.ai){ toast('Worker reached, but the AI binding is missing.','err',8000); return; }
+    const rl=j.rendersLeft||{}; const names={'klein-4b':'klein 4B','schnell':'schnell','klein-9b':'klein 9B','dev':'dev'};
+    toast(`Worker OK — ${j.neuronsUsed} of ${j.neuronBudget} free neurons used today. Renders left: ${Object.entries(rl).map(([k,v])=>names[k]+' '+v).join(', ')}.`+(j.persistentCap?'':' ⚠ Bind a KV namespace as LIMITS to make the cap exact.'),'ok',14000); }
   catch(e){ toast('Could not reach the Worker: '+e.message,'err',9000); return; }
   toast('Testing the vision model…');
   const c=mk(256,256), x=c.getContext('2d'); x.fillStyle='#d22'; x.fillRect(0,0,256,256); x.fillStyle='#fff'; x.fillRect(96,96,64,64);
