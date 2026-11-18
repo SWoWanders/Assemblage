@@ -122,12 +122,30 @@ async function plan(env, prompt) {
 
 async function vision(env, image, questions) {
   if (!image || !questions.length) throw new Error('image and questions required');
+  const n = questions.length;
   const q = questions.map((x, i) => `${i + 1}. ${x}`).join('\n');
-  const text = `Look carefully at this photo and answer each question with yes or no. Be strict.\n${q}\nReply ONLY as JSON: {"answers":["yes","no",...]} with exactly ${questions.length} entries.`;
-  const r = await visionAsk(env, image, text, 200);
-  return { answers: parseAnswers(r.text, questions.length), model: r.model };
+  const text = `Look carefully at this photo and answer each question with yes or no. Be strict: answer yes only if it is clearly true.\n${q}\nReply ONLY with JSON, no explanation: {"answers":["yes","no",...]} with exactly ${n} entries.`;
+  const errs = [];
+  for (const model of MODELS.vision) {
+    try {
+      // generous token budget: some newer models think before answering
+      const r = await env.AI.run(model, {
+        messages: [{ role: 'user', content: [{ type: 'text', text }, { type: 'image_url', image_url: { url: image } }] }],
+        max_tokens: 1200, temperature: 0,
+      });
+      const raw = textOf(r);
+      const answers = parseAnswers(raw, n);
+      if (answers.length === n) return { answers, model };
+      errs.push(`${model.split('/').pop()}: got ${answers.length}/${n} answers (${raw.slice(0, 80).replace(/\s+/g, ' ')})`);
+    } catch (e) {
+      errs.push(`${model.split('/').pop()}: ${String(e.message).slice(0, 120)}`);
+      if (/agree/i.test(String(e.message)) && model.includes('3.2')) { try { await env.AI.run(model, { prompt: 'agree' }); } catch {} }
+    }
+  }
+  throw new Error('No vision model answered: ' + errs.join(' | '));
 }
 function parseAnswers(s, n) {
+  s = String(s).replace(/<think>[\s\S]*?<\/think>/gi, '');
   try {
     const j = extractJSON(s);
     if (Array.isArray(j.answers)) return j.answers.slice(0, n).map(v => v === true || /^y/i.test(String(v)));

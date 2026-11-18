@@ -221,7 +221,9 @@ function normalizePlan(p, rawPrompt){
   if(!objects.length) return fb;
   const n=objects.length;
   const types=['left_of','right_of','behind','in_front_of','on','under','above','next_to'];
-  const relations=(Array.isArray(p.relations)?p.relations:[]).map(r=>({a:parseInt(r.a,10),b:parseInt(r.b,10),type:r.type})).filter(r=>r.a>=0&&r.b>=0&&r.a<n&&r.b<n&&r.a!==r.b&&types.includes(r.type)).slice(0,8);
+  const INV={left_of:'right_of',right_of:'left_of',behind:'in_front_of',in_front_of:'behind',above:'under',under:'above',on:'under',next_to:'next_to'};
+  const seenR=new Set();
+  const relations=(Array.isArray(p.relations)?p.relations:[]).map(r=>({a:parseInt(r.a,10),b:parseInt(r.b,10),type:r.type})).filter(r=>r.a>=0&&r.b>=0&&r.a<n&&r.b<n&&r.a!==r.b&&types.includes(r.type)).filter(r=>{ const k=r.a+r.type+r.b, k2=r.b+INV[r.type]+r.a; if(seenR.has(k)||seenR.has(k2)) return false; seenR.add(k); return true; }).slice(0,8);
   const main = Math.max(0,Math.min(n-1,parseInt(p.main,10)||0));
   return {setting, objects, relations, main, source:'ai'};
 }
@@ -245,7 +247,7 @@ function buildChecklist(plan){
   if(s.time==='night') out.push({kind:'time',q:'Is it night time?'});
   if(s.time==='sunset'||s.time==='sunrise') out.push({kind:'time',q:`Is it ${s.time}?`});
   out.push({kind:'realism',q:'Is this a realistic photograph, not a drawing, diagram, chart, collage or flat shapes?'});
-  return out;
+  const seenQ=new Set(); return out.filter(c=>!seenQ.has(c.q)&&seenQ.add(c.q));
 }
 
 // ---------- Geometry: a pinhole camera over a ground plane ----------
@@ -480,7 +482,7 @@ function drawGuide(plan, L, scene){
     const o=plan.objects[I.g]; const h=I.hpx*sy, w=h*aspectOf(o.name); const cx=I.x*sx; const top = I.sky ? I.y*sy-h/2 : I.baseY*sy-h;
     const base = o.color&&COLORS[o.color] ? COLORS[o.color] : o.material==='gold'?[212,166,60]: o.material==='glass'||o.material==='ice'?[200,228,240]: o.material==='marble'?[230,226,218]: o.material==='wood'?[132,86,48]: [128,124,118];
     if(!I.sky && !I.flying){ x.save(); x.fillStyle='rgba(0,0,0,.35)'; x.filter='blur(3px)'; x.beginPath(); x.ellipse(cx,top+h,w*0.45,Math.max(2,w*0.07),0,0,Math.PI*2); x.fill(); x.restore(); }
-    x.save(); x.filter='blur(1.5px)';
+    x.save(); x.filter='blur(9px)'; x.globalAlpha=0.85;
     const rg=x.createRadialGradient(cx-w*0.15,top+h*0.3,2,cx,top+h/2,Math.max(w,h)*0.7);
     rg.addColorStop(0,`rgb(${base.map(v=>clamp(v+45,0,255)).join(',')})`); rg.addColorStop(1,`rgb(${base.map(v=>v*0.6|0).join(',')})`);
     x.fillStyle=rg; const r=Math.min(w,h)*0.35; x.beginPath(); x.roundRect(cx-w/2,top,w,h,r); x.fill(); x.restore();
@@ -502,6 +504,7 @@ async function score(plan, checklist, v){
     const r=await workerPost('/vision',{image:toJPEG(v.bmp,512,344,0.85),questions:checklist.map(c=>c.q)});
     (r.answers||[]).forEach((a,i)=>{ if(v.checks[i]) v.checks[i].verdict=a?1:0; });
     v.visionModel=r.model;
+    if(!(r.answers||[]).length) throw new Error('the vision model returned no answers');
   }catch(e){ v.visionErr=e; }
   const done=v.checks.filter(c=>c.verdict!=null);
   // presence and realism count double: a picture missing its subject should never win
@@ -564,9 +567,9 @@ async function run(){
     step(3,'run');
     await Promise.all(variants.map(v=>score(plan,checklist,v)));
     const vErr=variants.find(v=>v.visionErr);
-    if(vErr) toast('Vision check failed: '+vErr.visionErr.message,'err');
+    if(vErr) toast('Vision check failed, so the best image could not be picked automatically — tap the thumbnails. Details are under Progress.','err',9000);
     variants.sort((a,b)=>b.score-a.score); let best=variants[0];
-    step(3, cfg.useVision&&!vErr?'done':'fail', cfg.useVision? 'best '+Math.round(best.score*100)+'% ('+best.label+')' : 'off');
+    step(3, cfg.useVision&&!vErr?'done':'fail', !cfg.useVision?'off': vErr? 'vision failed: '+vErr.visionErr.message.slice(0,160) : 'best '+Math.round(best.score*100)+'% ('+best.label+') · '+String(best.visionModel||'').split('/').pop());
     showVariant(best,variants);
     // 5 repair: targeted edits of the best image for whatever failed
     step(4,'run');
@@ -585,7 +588,7 @@ async function run(){
     }
     step(4,'done', rounds? (best.label.startsWith('repair')?'improved to '+Math.round(best.score*100)+'%':'no improvement — kept the best original') : 'nothing to repair');
     showVariant(best,variants);
-    toast('Done in '+((performance.now()-t0)/1000).toFixed(1)+'s — prompt match '+Math.round(best.score*100)+'%','ok');
+    toast('Done in '+((performance.now()-t0)/1000).toFixed(1)+'s'+(vErr||!cfg.useVision?'':' — prompt match '+Math.round(best.score*100)+'%'),'ok');
   }catch(e){
     toast(e.message||String(e),'err',8000); console.error(e);
   }finally{ busy=false; $('go').disabled=false; $('go').textContent='Assemble'; }
