@@ -603,8 +603,13 @@ async function brainPlan(prompt){
   const out=await polChat([{role:'system',content:PLAN_SYSTEM},{role:'user',content:prompt}],900);
   return {plan:jsonIn(out), model:'Pollinations (free)'};
 }
-async function brainVision(image, questions){
+async function brainVision(image, questions, plan, checklist){
   if(usesCloudflare()) return await workerPost('/vision',{image,questions});
+  if(!cfg.polToken || cfg.checker==='device') return await clipVision(image, plan, checklist);
+  try{ return await polVision(image, questions); }
+  catch(e){ toast('Pollinations vision unavailable — using the on-device checker instead.','',6000); return await clipVision(image, plan, checklist); }
+}
+async function polVision(image, questions){
   const q=questions.map((x,i)=>`${i+1}. ${x}`).join('\n');
   const text=`Look carefully at this photo and answer each question with yes or no. Be strict: answer yes only if it is clearly true.\n${q}\nReply ONLY with JSON, no explanation: {"answers":["yes","no",...]} with exactly ${questions.length} entries.`;
   const tried=[];
@@ -618,6 +623,44 @@ async function brainVision(image, questions){
     }catch(e){ tried.push(m+': '+String(e.message).replace(/^Pollinations text /,'').slice(0,70)); if(e.status!==400&&e.status!==404&&e.status!==401&&e.status!==402&&e.status!==403) break; }
   }
   throw new Error('no free Pollinations vision model accepted the image'+(cfg.polToken?'':' — a free token (⚙︎) unlocks more models')+'. Tried: '+tried.join(' | '));
+}
+
+// ---- On-device checker: CLIP running in the browser (free, no account, no limit; ~150 MB download once) ----
+let clipP=null;
+function loadClip(){
+  if(clipP) return clipP;
+  toast('Loading the on-device checker (about 150 MB the first time, then from your phone’s cache)…','',9000);
+  clipP=import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@3').then(t=>t.pipeline('zero-shot-image-classification','Xenova/clip-vit-base-patch32'))
+    .catch(e=>{ clipP=null; throw new Error('could not load the on-device checker ('+e.message+')'); });
+  return clipP;
+}
+// Each checklist item becomes a small multiple-choice question for CLIP. Counts and left/right are beyond
+// what CLIP can judge reliably, so those stay "unchecked" instead of guessing.
+function clipGroups(plan, checklist){
+  const O=plan.objects, s=plan.setting;
+  const colors=['red','orange','yellow','green','blue','purple','pink','brown','black','white','grey'];
+  const mats=['glass','gold','silver','metal','wood','stone','marble','ice','neon','paper'];
+  return checklist.map(c=>{
+    const o=c.g!=null?O[c.g]:null;
+    if(c.kind==='presence'){ const others=['an empty room','an empty street','a landscape','a person','a car','a dog','a building','a tree'].filter(x=>!x.includes(o.name)); return {target:`a photo of ${/^[aeiou]/.test(o.name)?'an':'a'} ${o.name}`, others:others.map(x=>'a photo of '+x), top:1}; }
+    if(c.kind==='color'){ return {target:`a ${o.color} ${o.name}`, others:colors.filter(x=>x!==o.color&&!(x==='grey'&&o.color==='gray')).map(x=>`a ${x} ${o.name}`), top:2}; }
+    if(c.kind==='material'){ return {target:`a ${o.name} made of ${o.material}`, others:[`a normal ${o.name}`,...mats.filter(x=>x!==o.material).slice(0,6).map(x=>`a ${o.name} made of ${x}`)], top:1}; }
+    if(c.kind==='state'){ return {target:`a ${o.name} flying in the air`, others:[`a ${o.name} on the ground`], top:1}; }
+    if(c.kind==='setting'){ const pool=['a beach','a forest','a city street','a living room','an office','a desert','a kitchen','a mountain','outer space','a field']; return {target:`a photo taken in ${/^[aeiou]/.test(s.query)?'an':'a'} ${s.query}`, others:pool.filter(x=>!x.includes(s.query)&&!s.query.includes(x.replace(/^an? /,''))).map(x=>'a photo taken in '+x), top:2}; }
+    if(c.kind==='weather'){ const m={fog:'a foggy scene',rain:'a rainy scene',snow:'a snowy scene',haze:'a hazy scene'}; return {target:m[s.weather], others:['a clear sunny scene',...Object.values(m).filter(x=>x!==m[s.weather])], top:1}; }
+    if(c.kind==='time'){ const m={night:'a photo taken at night',sunset:'a photo taken at sunset',sunrise:'a photo taken at sunrise'}; return {target:m[s.time], others:['a photo taken in the middle of the day',...Object.values(m).filter(x=>x!==m[s.time])], top:1}; }
+    if(c.kind==='realism'){ return {target:'a real photograph', others:['a drawing','a cartoon','a painting','a 3D render','a diagram','a collage'], top:1}; }
+    return null; // count, relation: not judged on-device
+  });
+}
+async function clipVision(image, plan, checklist){
+  const clf=await loadClip();
+  const groups=clipGroups(plan, checklist);
+  const labels=[...new Set(groups.filter(Boolean).flatMap(g=>[g.target,...g.others]))];
+  const out=await clf(image, labels); // one pass; softmax over all labels, re-normalised per question below
+  const sc=Object.fromEntries(out.map(o=>[o.label,o.score]));
+  const answers=groups.map(g=>{ if(!g) return null; const opts=[g.target,...g.others].map(l=>({l,v:sc[l]||0})).sort((a,b)=>b.v-a.v); return opts.slice(0,g.top).some(x=>x.l===g.target); });
+  return {answers, model:'on-device CLIP'};
 }
 async function render(prompt, seed, guideURL, editURL){
   const t0=performance.now(); let blob;
@@ -635,10 +678,10 @@ async function score(plan, checklist, v){
   v.checks=checklist.map(c=>({...c,verdict:null}));
   if(!cfg.useVision){ v.score=0.5; return v; }
   try{
-    const r=await brainVision(toJPEG(v.bmp,512,344,0.85),checklist.map(c=>c.q));
-    (r.answers||[]).forEach((a,i)=>{ if(v.checks[i]) v.checks[i].verdict=a?1:0; });
+    const r=await brainVision(toJPEG(v.bmp,512,344,0.85),checklist.map(c=>c.q),plan,checklist);
+    (r.answers||[]).forEach((a,i)=>{ if(v.checks[i]) v.checks[i].verdict= a==null? null : (a?1:0); });
     v.visionModel=r.model;
-    if(!(r.answers||[]).length) throw new Error('the vision model returned no answers');
+    if(!(r.answers||[]).some(a=>a!=null)) throw new Error('the vision model returned no answers');
   }catch(e){ v.visionErr=e; }
   const done=v.checks.filter(c=>c.verdict!=null);
   // presence and realism count double: a picture missing its subject should never win
@@ -652,7 +695,8 @@ let current=null;
 function showChecks(v){
   if(!v||!v.checks){ $('checks').textContent='–'; $('score').textContent='–'; return; }
   $('score').textContent= v.checks.some(c=>c.verdict!=null) ? Math.round(v.score*100)+'%' : '?';
-  $('checks').innerHTML=v.checks.map(c=>{ const cls=c.verdict==null?'unk':c.verdict?'yes':'no'; const sym=c.verdict==null?'?':c.verdict?'✓':'✕'; return `<div class="check ${cls}"><b>${sym}</b><span>${c.q}</span></div>`; }).join('');
+  const dev = v.visionModel==='on-device CLIP';
+  $('checks').innerHTML=v.checks.map(c=>{ const cls=c.verdict==null?'unk':c.verdict?'yes':'no'; const sym=c.verdict==null?'?':c.verdict?'✓':'✕'; return `<div class="check ${cls}"><b>${sym}</b><span>${c.q}${dev&&c.verdict==null?' <span class="hint">(not checkable on-device)</span>':''}</span></div>`; }).join('')+(dev?'<div class="hint" style="margin-top:6px">Checked on your phone with CLIP — free and unlimited, but it can’t count or judge left/right.</div>':'');
 }
 function showVariant(v, all){
   current=v; const o=$('out').getContext('2d'); o.fillStyle='#000'; o.fillRect(0,0,$('out').width,$('out').height); o.drawImage(v.bmp,0,0,$('out').width,$('out').height);
