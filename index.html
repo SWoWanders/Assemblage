@@ -96,7 +96,7 @@ dialog input[type=text],dialog input[type=url]{width:100%;padding:10px;backgroun
       <div><label for="nvar">Variations</label><input type="range" id="nvar" min="1" max="4" value="3"><span class="hint" id="nvarV">3</span></div>
       <div><label for="nrep">Repair rounds</label><input type="range" id="nrep" min="0" max="3" value="2"><span class="hint" id="nrepV">2</span></div>
     </div>
-    <label><input type="checkbox" id="useGuide" checked> Use the layout guide image</label>
+    <label><input type="checkbox" id="useGuide"> Use the layout guide image (experimental: can leave coloured blobs)</label>
     <label><input type="checkbox" id="useVision" checked> Check results with vision</label>
     <div class="row" style="margin-top:12px"><button class="sec" id="testW" type="button">Test Worker</button><span style="flex:1"></span><button class="sec" value="close">Done</button></div>
   </form>
@@ -450,7 +450,8 @@ const $=id=>document.getElementById(id);
 const W=1024, H=688;           // render size (multiple of 16)
 const GW=504, GH=336;          // guide / edit input size (< 512x512 required by FLUX.2 klein)
 const LS={get:(k,d)=>{try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v);}catch{return d;}},set:(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v));}catch{}}};
-const cfg = Object.assign({worker:'',nvar:3,nrep:2,useGuide:true,useVision:true}, LS.get('assemblage.cfg',{}));
+const cfg = Object.assign({worker:'',nvar:3,nrep:2,useGuide:false,useVision:true}, LS.get('assemblage.cfg',{}));
+if(!LS.get('assemblage.v4',false)){ cfg.useGuide=false; LS.set('assemblage.v4',true); LS.set('assemblage.cfg',cfg); }
 if(cfg.nvar>4) cfg.nvar=3;
 const workerURL=()=> (cfg.worker||'').replace(/\/+$/,'');
 const clamp=(v,a,b)=>v<a?a:v>b?b:v;
@@ -567,10 +568,11 @@ async function run(){
     step(3,'run');
     await Promise.all(variants.map(v=>score(plan,checklist,v)));
     const vErr=variants.find(v=>v.visionErr);
-    if(vErr) toast('Vision check failed, so the best image could not be picked automatically — tap the thumbnails. Details are under Progress.','err',9000);
+    if(vErr){ toast('Vision check failed — reason shown in the Prompt match box.','err',9000); }
     variants.sort((a,b)=>b.score-a.score); let best=variants[0];
     step(3, cfg.useVision&&!vErr?'done':'fail', !cfg.useVision?'off': vErr? 'vision failed: '+vErr.visionErr.message.slice(0,160) : 'best '+Math.round(best.score*100)+'% ('+best.label+') · '+String(best.visionModel||'').split('/').pop());
     showVariant(best,variants);
+    if(vErr) $('checks').insertAdjacentHTML('afterbegin',`<div class="check no" style="font-size:13px"><b>!</b><span>Vision check failed: ${String(vErr.visionErr.message).replace(/</g,'&lt;')}</span></div>`);
     // 5 repair: targeted edits of the best image for whatever failed
     step(4,'run');
     let rounds=0;
@@ -606,7 +608,16 @@ function saveCfg(){ cfg.worker=$('wurl').value.trim(); cfg.nvar=+$('nvar').value
 ['wurl','nvar','nrep','useGuide','useVision'].forEach(id=>$(id).addEventListener('input',saveCfg));
 $('gearBtn').onclick=()=>{ syncCfg(); $('settings').showModal(); };
 $('settings').addEventListener('close',()=>{ saveCfg(); toast(workerURL()?'Settings saved.':'Settings saved — add the Worker URL to render.'); });
-$('testW').onclick=async()=>{ saveCfg(); if(!workerURL()){ toast('Enter the Worker URL first.','err'); return; } try{ const r=await fetch(workerURL()+'/status'); const j=await r.json(); toast(j.ai? 'Worker OK'+(j.used!=null?` — ${j.used}/${j.cap} AI calls used today`:' (no daily cap: KV not bound)') : 'Worker reached, but the AI binding is missing.', j.ai?'ok':'err',6000); }catch(e){ toast('Could not reach the Worker: '+e.message,'err'); } };
+$('testW').onclick=async()=>{ saveCfg(); if(!workerURL()){ toast('Enter the Worker URL first.','err'); return; }
+  try{ const r=await fetch(workerURL()+'/status'); const j=await r.json(); toast(j.ai? 'Worker reached'+(j.used!=null?` — ${j.used}/${j.cap} AI calls used today`:'') : 'Worker reached, but the AI binding is missing.', j.ai?'ok':'err',6000); if(!j.ai) return; }
+  catch(e){ toast('Could not reach the Worker: '+e.message,'err',9000); return; }
+  toast('Testing the vision model…');
+  const c=mk(256,256), x=c.getContext('2d'); x.fillStyle='#d22'; x.fillRect(0,0,256,256); x.fillStyle='#fff'; x.fillRect(96,96,64,64);
+  try{ const r=await workerPost('/vision',{image:c.toDataURL('image/jpeg',0.9),questions:['Is most of this image red?','Is there a white square?','Is there a cat?']});
+    const ok=JSON.stringify(r.answers)==='[true,true,false]';
+    toast(`Vision ${ok?'works':'answered oddly'}: ${JSON.stringify(r.answers)} via ${String(r.model||'?').split('/').pop()}`, ok?'ok':'err', 12000); }
+  catch(e){ toast('Vision test failed: '+e.message,'err',20000); }
+};
 resetSteps();
 </script>
 
