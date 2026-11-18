@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Assemblage — images from real photographs</title>
+<title>Assemblage — layout-true text to image</title>
 <meta name="theme-color" content="#14110f">
 <style>
 :root{--bg:#14110f;--panel:#1e1a17;--line:#3a322b;--ink:#efe6da;--dim:#a89b8b;--acc:#e8a33d;--ok:#7fc27a;--bad:#e2685b;--r:14px}
@@ -23,7 +23,7 @@ button.sec{min-height:40px;background:#2a241f;color:var(--ink);border:1px solid 
 .chips{display:flex;gap:6px;overflow-x:auto;padding:8px 0 2px;scrollbar-width:none}
 .chip{flex:none;font-size:13px;padding:6px 10px;border-radius:99px;background:#2a241f;border:1px solid var(--line);color:var(--dim)}
 #stage{position:relative;border-radius:var(--r);overflow:hidden;background:#000;border:1px solid var(--line)}
-#out{display:block;width:100%;height:auto;aspect-ratio:3/2}
+#out{display:block;width:100%;height:auto;aspect-ratio:1024/688}
 #stage .empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--dim);font-size:14px;text-align:center;padding:20px}
 .steps{list-style:none;margin:0;padding:0;font-size:14px}
 .steps li{padding:3px 0;color:var(--dim)}
@@ -52,7 +52,7 @@ dialog input[type=text],dialog input[type=url]{width:100%;padding:10px;backgroun
 </head>
 <body>
 <header>
-  <h1>Assemblage<small>Pictures built from real photographs, not generated pixels</small></h1>
+  <h1>Assemblage<small>Plans the scene first, then renders it — and checks it matches</small></h1>
   <button class="gear" id="gearBtn" aria-label="Settings">⚙︎</button>
 </header>
 <main>
@@ -65,7 +65,7 @@ dialog input[type=text],dialog input[type=url]{width:100%;padding:10px;backgroun
     </div>
   </div>
 
-  <div id="stage"><canvas id="out" width="1024" height="683"></canvas><div class="empty" id="empty">Your picture appears here.<br>Built from public-domain &amp; Creative Commons photos.</div></div>
+  <div id="stage"><canvas id="out" width="1024" height="688"></canvas><div class="empty" id="empty">Your picture appears here.</div></div>
   <div id="thumbs"></div>
 
   <div class="cols">
@@ -80,26 +80,25 @@ dialog input[type=text],dialog input[type=url]{width:100%;padding:10px;backgroun
   </div>
 
   <div class="card">
-    <details><summary>Scene plan</summary><pre id="planView">–</pre></details>
+    <details><summary>Scene plan, layout guide &amp; prompt</summary><canvas id="guideView" width="504" height="336" style="width:100%;border-radius:8px;margin-top:8px"></canvas><pre id="promptView">–</pre><pre id="planView">–</pre></details>
   </div>
-  <div class="card credits" id="credits">Image credits appear here.</div>
+  <div class="card credits" id="credits">Rendered with FLUX.2 [klein] and checked with a vision model, both on Cloudflare Workers AI through your Worker.</div>
 </main>
 <div id="toasts"></div>
 
 <dialog id="settings">
   <form method="dialog">
     <strong>Settings</strong>
-    <label for="wurl">Worker URL (optional)</label>
+    <label for="wurl">Worker URL (required)</label>
     <input type="url" id="wurl" placeholder="https://assemblage.yourname.workers.dev">
-    <div class="hint">With the Worker: smarter planning, vision checks and the polish pass (Cloudflare Workers AI). Without it the app still works using its built-in parser.</div>
+    <div class="hint">Rendering, planning and checking all run on your Cloudflare Worker (Workers AI free allowance).</div>
     <div class="grid2">
-      <div><label for="nvar">Variations</label><input type="range" id="nvar" min="2" max="6" value="4"><span class="hint" id="nvarV">4</span></div>
-      <div><label for="pstr">Polish strength</label><input type="range" id="pstr" min="10" max="50" value="35"><span class="hint" id="pstrV">0.35</span></div>
+      <div><label for="nvar">Variations</label><input type="range" id="nvar" min="1" max="4" value="3"><span class="hint" id="nvarV">3</span></div>
+      <div><label for="nrep">Repair rounds</label><input type="range" id="nrep" min="0" max="3" value="2"><span class="hint" id="nrepV">2</span></div>
     </div>
-    <label><input type="checkbox" id="useVision" checked> Vision checks (Worker)</label>
-    <label><input type="checkbox" id="usePolish" checked> AI polish pass (Worker)</label>
-    <label><input type="checkbox" id="hdBg"> HD backgrounds (bigger download)</label>
-    <div class="row" style="margin-top:12px"><button class="sec" id="testW" type="button">Test Worker</button><button class="sec" id="clearLib" type="button">Clear learned library</button><span style="flex:1"></span><button class="sec" value="close">Done</button></div>
+    <label><input type="checkbox" id="useGuide" checked> Use the layout guide image</label>
+    <label><input type="checkbox" id="useVision" checked> Check results with vision</label>
+    <div class="row" style="margin-top:12px"><button class="sec" id="testW" type="button">Test Worker</button><span style="flex:1"></span><button class="sec" value="close">Done</button></div>
   </form>
 </dialog>
 
@@ -245,6 +244,7 @@ function buildChecklist(plan){
   if(s.weather!=='clear') out.push({kind:'weather',q:`Is it ${({fog:'foggy',rain:'raining',snow:'snowing',haze:'hazy'})[s.weather]}?`});
   if(s.time==='night') out.push({kind:'time',q:'Is it night time?'});
   if(s.time==='sunset'||s.time==='sunrise') out.push({kind:'time',q:`Is it ${s.time}?`});
+  out.push({kind:'realism',q:'Is this a realistic photograph, not a drawing, diagram, chart, collage or flat shapes?'});
   return out;
 }
 
@@ -381,450 +381,146 @@ function verifyLayout(plan, L, W, H){
   return res;
 }
 
-if(typeof module!=='undefined') module.exports={parsePrompt,normalizePlan,buildChecklist,solveLayout,verifyLayout,singular,COLORS,MATERIALS};
+
+// ---------- Prompt compiler: turns the solved layout into explicit, positional language ----------
+const ASPECTS={umbrella:1.0,bicycle:1.7,bike:1.7,motorcycle:1.6,car:2.4,truck:2.4,bus:2.8,train:3,boat:2,ship:3,canoe:3,airplane:2.2,plane:2.2,helicopter:1.8,person:0.38,man:0.38,woman:0.36,child:0.42,boy:0.42,girl:0.42,astronaut:0.45,knight:0.45,robot:0.5,dog:1.3,puppy:1.2,cat:1.1,kitten:1.1,horse:1.25,pony:1.2,cow:1.5,sheep:1.4,goat:1.3,pig:1.6,deer:1.1,moose:1.2,bear:1.5,wolf:1.4,fox:1.5,rabbit:1.0,owl:0.7,bird:1.1,eagle:1.6,duck:1.1,swan:1.2,chicken:1.0,penguin:0.6,elephant:1.4,giraffe:0.7,lion:1.6,tiger:1.8,zebra:1.4,camel:1.3,whale:2.8,dolphin:2.4,shark:2.6,fish:2,turtle:1.6,dragon:1.6,dinosaur:1.6,unicorn:1.25,table:1.6,desk:1.7,chair:0.6,armchair:0.95,sofa:2.2,couch:2.2,bench:2.2,lamp:0.4,tree:0.65,'palm tree':0.6,house:1.3,cabin:1.4,barn:1.4,castle:1.6,church:1.0,tower:0.3,lighthouse:0.3,windmill:0.6,building:0.8,skyscraper:0.25,statue:0.5,fountain:1.2,piano:1.4,guitar:0.4,teapot:1.3,cup:1.2,mug:1.2,bottle:0.35,vase:0.6,book:0.75,clock:1.0,'grandfather clock':0.3,'hot air balloon':0.75,balloon:0.8,kite:0.9,moon:1,sun:1,planet:1,cloud:2,ufo:2.2,rocket:0.25,cactus:0.5,snowman:0.6,mushroom:1.1,pumpkin:1.3,streetcar:2.6,tram:2.6};
+function aspectOf(name){ if(ASPECTS[name]!=null) return ASPECTS[name]; const last=name.split(' ').pop(); return ASPECTS[last]!=null?ASPECTS[last]:1.0; }
+const NUMWORD=['','one','two','three','four','five','six','seven','eight'];
+const MATPHRASE={glass:'made entirely of clear glass',ice:'carved from translucent ice',gold:'made of polished gold',bronze:'cast in bronze',silver:'made of shiny chrome silver',metal:'made of brushed metal',wood:'made of wood',stone:'carved from grey stone',marble:'carved from white marble',neon:'made of glowing neon light tubes',paper:'folded from paper like origami'};
+function describe(o, withCount=true){
+  const n=o.count; const noun=n>1?plural(o.name):o.name;
+  const art = /^[aeiou]/.test((o.color||o.name)) ? 'an' : 'a';
+  const head = withCount ? (n>1? 'exactly '+NUMWORD[Math.min(n,8)] : art) : 'the';
+  return [head, o.color, noun, o.material?MATPHRASE[o.material]:''].filter(Boolean).join(' ');
+}
+function zoneOf(I, W, H){
+  if(I.sky) return 'in the sky';
+  const t=I.x/W; const hz = t<0.36?'on the left':t>0.64?'on the right':'in the centre';
+  if(I.flying) return 'high in the air '+hz.replace('in the centre','in the middle');
+  if(I.onTop) return hz;
+  const b=(I.baseY||0)/H; const d = b>0.86?'in the foreground':b<0.66?'in the background':'in the middle distance';
+  return hz+' '+d;
+}
+const RELWORD={left_of:'to the left of',right_of:'to the right of',behind:'behind',in_front_of:'in front of',on:'standing on top of',under:'underneath',above:'above',next_to:'next to'};
+function compilePrompt(plan, L, W, H, guided){
+  const s=plan.setting, O=plan.objects;
+  const timeP={day:'in daylight',sunrise:'at sunrise with warm low light',sunset:'at sunset with golden light',night:'at night',overcast:'under an overcast sky'}[s.time]||'';
+  const wP={clear:'',fog:'in thick fog',rain:'in the rain',snow:'while snow falls',haze:'in hazy air'}[s.weather]||'';
+  const art=q=>/^[aeiou]/.test(q)?'an ':'a ';
+  const water=/\b(lake|river|ocean|sea|beach|coast|shore|harbou?r|pier|waterfall|pond)\b/.test(s.query||'');
+  const place = s.query ? (s.kind==='indoor'?'inside '+art(s.query)+s.query: s.kind==='space'?'in outer space': s.kind==='underwater'?'underwater': (water?'by ':'at ')+art(s.query)+s.query) : (s.kind==='indoor'?'indoors':'outdoors');
+  const parts=[`A realistic photograph taken ${place}, ${[timeP,wP].filter(Boolean).join(', ')||'in natural light'}.`];
+  O.forEach((o,g)=>{
+    const mine=L.inst.filter(I=>I.g===g); if(!mine.length) return;
+    const avg={x:mine.reduce((a,I)=>a+I.x,0)/mine.length, baseY:mine.reduce((a,I)=>a+(I.baseY||0),0)/mine.length, sky:mine[0].sky, flying:mine[0].flying, onTop:mine[0].onTop};
+    const d=describe(o); parts.push(`${zoneOf(avg,W,H).replace(/^./,c=>c.toUpperCase())}: ${d}.`);
+  });
+  (plan.relations||[]).forEach(r=>{ parts.push(`The ${O[r.a].name}${O[r.a].count>1?'s are':' is'} ${RELWORD[r.type]} the ${O[r.b].name}.`); });
+  parts.push('Correct real-world proportions, consistent shadows and lighting, sharp focus, 35mm lens. No text, no watermark, no extra objects.');
+  const body=parts.join(' ');
+  return guided ? 'Use the input image only as a rough layout guide: each soft coloured shape marks where one object goes and roughly how big it is, and the flat backdrop marks the horizon. Replace every shape with the real object described below and replace the backdrop with the real setting, so the result is a natural photograph with no visible shapes. '+body : body;
+}
+function repairInstruction(plan, fails){
+  const O=plan.objects; const fx=[];
+  for(const c of fails){
+    const o=c.g!=null?O[c.g]:null;
+    if(c.kind==='presence') fx.push(`Add ${describe(o)} so ${o.count>1?'they are':'it is'} clearly visible.`);
+    else if(c.kind==='count') fx.push(`Make sure there are exactly ${NUMWORD[Math.min(o.count,8)]} ${plural(o.name)}, no more and no fewer.`);
+    else if(c.kind==='color') fx.push(`Make the ${o.name}${o.count>1?'s':''} clearly ${o.color}.`);
+    else if(c.kind==='material') fx.push(`Make the ${o.name} look ${MATPHRASE[o.material]}.`);
+    else if(c.kind==='state') fx.push(`Lift the ${o.count>1?plural(o.name):o.name} up into the air.`);
+    else if(c.kind==='relation') fx.push(`Move the ${O[c.rel.a].name} so it is ${RELWORD[c.rel.type]} the ${O[c.rel.b].name}.`);
+    else if(c.kind==='weather') fx.push(`Make the weather ${({fog:'foggy',rain:'rainy',snow:'snowy',haze:'hazy'})[plan.setting.weather]}.`);
+    else if(c.kind==='time') fx.push(`Make it ${plan.setting.time==='night'?'night time':plan.setting.time}.`);
+    else if(c.kind==='setting') fx.push(`Make the setting clearly ${/^[aeiou]/.test(plan.setting.query)?'an':'a'} ${plan.setting.query}.`);
+    else if(c.kind==='realism') fx.push('Make it look like a real, natural photograph.');
+  }
+  return 'Edit this photo. '+fx.slice(0,3).join(' ')+' Keep everything else exactly the same: same composition, camera and lighting.';
+}
+
+if(typeof module!=='undefined') module.exports={parsePrompt,normalizePlan,buildChecklist,solveLayout,verifyLayout,singular,COLORS,MATERIALS,compilePrompt,repairInstruction,aspectOf};
 </script>
 
 <!-- ===================== APP (browser) ===================== -->
 <script>
 'use strict';
 const $=id=>document.getElementById(id);
-const W=1024, H=683;
+const W=1024, H=688;           // render size (multiple of 16)
+const GW=504, GH=336;          // guide / edit input size (< 512x512 required by FLUX.2 klein)
 const LS={get:(k,d)=>{try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v);}catch{return d;}},set:(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v));}catch{}}};
-const cfg = Object.assign({worker:'',nvar:4,pstr:0.35,useVision:true,usePolish:true,hdBg:false}, LS.get('assemblage.cfg',{}));
+const cfg = Object.assign({worker:'',nvar:3,nrep:2,useGuide:true,useVision:true}, LS.get('assemblage.cfg',{}));
+if(cfg.nvar>4) cfg.nvar=3;
 const workerURL=()=> (cfg.worker||'').replace(/\/+$/,'');
+const clamp=(v,a,b)=>v<a?a:v>b?b:v;
 
-// ---------- feedback: toasts + step list (no silent failures) ----------
+// ---------- feedback ----------
 function toast(msg,kind='',ms=4200){ const t=document.createElement('div'); t.className='toast '+kind; t.textContent=msg; $('toasts').appendChild(t); setTimeout(()=>t.remove(),ms); }
-const STEPS=['Plan the scene','Find a background','Find & cut out objects','Arrange with real geometry','Light, shadow & camera pass','Check against the prompt','Repair weak spots','AI polish pass'];
+const STEPS=['Plan the scene','Lay out with real geometry','Render variations','Check against the prompt','Repair what failed'];
 function resetSteps(){ $('steps').innerHTML=STEPS.map((s,i)=>`<li id="st${i}">${s}</li>`).join(''); }
 function step(i,state,note){ const li=$('st'+i); if(!li) return; li.className=state; li.textContent=STEPS[i]+(note?' — '+note:''); }
 
-// ---------- networking ----------
-async function xfetch(url, as='blob'){
-  const tries=[];
-  if(workerURL()) tries.push(workerURL()+'/fetch?url='+encodeURIComponent(url));
-  tries.push(url);
-  let err;
-  for(const u of tries){
-    try{ const r=await fetch(u,{mode:'cors'}); if(!r.ok) throw new Error('HTTP '+r.status); return as==='json'?await r.json():await r.blob(); }catch(e){ err=e; }
-  }
-  throw err||new Error('fetch failed');
-}
 async function workerPost(path, body, as='json'){
   const r=await fetch(workerURL()+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   if(!r.ok){ let m='HTTP '+r.status; try{ const j=await r.json(); m=j.error||m; }catch{} const e=new Error(m); e.status=r.status; throw e; }
   return as==='json'?r.json():r.blob();
 }
-async function loadBitmap(url){ const b=await xfetch(url,'blob'); if(!/^image\//.test(b.type) && b.size<200) throw new Error('not an image'); return await createImageBitmap(b); }
+function mk(w,h){ const c=document.createElement('canvas'); c.width=Math.round(w); c.height=Math.round(h); return c; }
+function toJPEG(src,w,h,q=0.88){ const c=mk(w,h); const x=c.getContext('2d'); x.imageSmoothingQuality='high'; x.drawImage(src,0,0,w,h); return c.toDataURL('image/jpeg',q); }
 
-// ---------- canvas helpers ----------
-function mk(w,h){ const c=document.createElement('canvas'); c.width=Math.max(1,Math.round(w)); c.height=Math.max(1,Math.round(h)); return c; }
-function ctx2(c){ return c.getContext('2d',{willReadFrequently:true}); }
-const clamp=(v,a,b)=>v<a?a:v>b?b:v;
-const lum=(r,g,b)=>(0.2126*r+0.7152*g+0.0722*b);
-function rgbToHsl(r,g,b){ r/=255;g/=255;b/=255; const mx=Math.max(r,g,b),mn=Math.min(r,g,b); let h=0,s=0; const l=(mx+mn)/2; if(mx!==mn){ const d=mx-mn; s=l>0.5?d/(2-mx-mn):d/(mx+mn); h= mx===r?(g-b)/d+(g<b?6:0): mx===g?(b-r)/d+2:(r-g)/d+4; h/=6; } return [h,s,l]; }
-function hslToRgb(h,s,l){ if(s===0){ const v=l*255; return [v,v,v]; } const q=l<0.5?l*(1+s):l+s-l*s, p=2*l-q; const f=t=>{ if(t<0)t+=1; if(t>1)t-=1; if(t<1/6) return p+(q-p)*6*t; if(t<1/2) return q; if(t<2/3) return p+(q-p)*(2/3-t)*6; return p; }; return [f(h+1/3)*255,f(h)*255,f(h-1/3)*255]; }
-function seeded(seed){ let s=seed>>>0||1; return ()=>{ s^=s<<13; s^=s>>>17; s^=s<<5; return ((s>>>0)%100000)/100000; }; }
-function boxBlur(a,w,h,r){ // separable box blur on Float32Array
-  const t=new Float32Array(a.length); r=Math.max(1,r|0);
-  for(let y=0;y<h;y++){ let acc=0; const o=y*w; for(let x=-r;x<=r;x++) acc+=a[o+clamp(x,0,w-1)]; for(let x=0;x<w;x++){ t[o+x]=acc/(2*r+1); acc+=a[o+clamp(x+r+1,0,w-1)]-a[o+clamp(x-r,0,w-1)]; } }
-  for(let x=0;x<w;x++){ let acc=0; for(let y=-r;y<=r;y++) acc+=t[clamp(y,0,h-1)*w+x]; for(let y=0;y<h;y++){ a[y*w+x]=acc/(2*r+1); acc+=t[clamp(y+r+1,0,h-1)*w+x]-t[clamp(y-r,0,h-1)*w+x]; } }
-  return a;
-}
-
-// ---------- Sources: Wikimedia Commons, Openverse, Poly Haven ----------
-const credits=new Map();
-function credit(url,info){ credits.set(url,info); }
-async function commonsSearch(q, n=24, thumbW=640){
-  const u='https://commons.wikimedia.org/w/api.php?action=query&format=json&origin=*&generator=search&gsrnamespace=6&gsrlimit='+n+'&gsrsearch='+encodeURIComponent(q)+'&prop=imageinfo&iiprop=url|size|mime|extmetadata&iiurlwidth='+thumbW;
-  const j=await xfetch(u,'json');
-  const pages=Object.values((j.query&&j.query.pages)||{}).sort((a,b)=>(a.index||0)-(b.index||0));
-  return pages.map(p=>{ const ii=(p.imageinfo||[])[0]||{}; const md=ii.extmetadata||{}; const strip=s=>String(s||'').replace(/<[^>]+>/g,'').trim();
-    return {src:'commons',title:p.title.replace(/^File:/,''),url:ii.thumburl||ii.url,page:ii.descriptionurl,w:ii.width,h:ii.height,mime:ii.mime,license:strip(md.LicenseShortName&&md.LicenseShortName.value),author:strip(md.Artist&&md.Artist.value).slice(0,60)}; }).filter(x=>x.url);
-}
-async function openverseSearch(q, extra='', original=false){
-  const u='https://api.openverse.org/v1/images/?page_size=20&mature=false&q='+encodeURIComponent(q)+extra;
-  const j=await xfetch(u,'json');
-  return (j.results||[]).map(r=>({src:'openverse',title:r.title||q,url:original?(r.url||r.thumbnail):(r.thumbnail||r.url),page:r.foreign_landing_url,w:r.width,h:r.height,license:(r.license||'').toUpperCase()+' '+(r.license_version||''),author:(r.creator||'').slice(0,60)}));
-}
-const BAD_TITLES=/(logo|icon|map|flag|diagram|coat of arms|emblem|symbol|chart|graph|clip.?art|cartoon|illustration|vector|drawing|sketch|font|text|seal|badge|sign|stamp|svg|pictogram|emoji|silhouette|outline|line art|comic)/i;
-
-// ---------- Cutout analysis: PNG alpha first, plain-background photos second ----------
-function analyzeCutout(bmp){
-  const s=Math.min(1,256/Math.max(bmp.width,bmp.height)); const w=Math.max(8,Math.round(bmp.width*s)), h=Math.max(8,Math.round(bmp.height*s));
-  const c=mk(w,h), x=ctx2(c); x.drawImage(bmp,0,0,w,h); const d=x.getImageData(0,0,w,h).data;
-  let transp=0, border=0, borderT=0, minX=w,minY=h,maxX=0,maxY=0; const q=new Set();
-  for(let y=0;y<h;y++) for(let xx=0;xx<w;xx++){ const i=(y*w+xx)*4, a=d[i+3]; const edge= y===0||xx===0||y===h-1||xx===w-1; if(edge){ border++; if(a<24) borderT++; }
-    if(a<24) transp++; else { if(xx<minX)minX=xx; if(xx>maxX)maxX=xx; if(y<minY)minY=y; if(y>maxY)maxY=y; q.add((d[i]>>4)<<8|(d[i+1]>>4)<<4|(d[i+2]>>4)); } }
-  const tf=transp/(w*h), bf=borderT/border;
-  if(tf>0.08 && bf>0.8 && tf<0.94){
-    const photo = q.size>220; // clip-art has few colours
-    return {mode:'alpha', score: (photo?1:0.35) * (0.6+0.4*bf) * (1-Math.abs(tf-0.5)*0.6), bbox:[minX/s,minY/s,(maxX+1)/s,(maxY+1)/s]};
+// ---------- Layout guide: soft coloured blocks where each object goes ----------
+function drawGuide(plan, L, scene){
+  const c=mk(GW,GH), x=c.getContext('2d'); const sx=GW/W, sy=GH/H; const s=plan.setting;
+  const sky={day:'#9fc4e8',sunrise:'#f0b98a',sunset:'#e99a62',night:'#1c2440',overcast:'#b7bdc4'}[s.time]||'#9fc4e8';
+  const skyTop = s.kind==='indoor' ? (s.time==='night'?'#3a3228':'#bfae94') : s.kind==='underwater' ? '#1d6f8f' : sky;
+  const ground= s.kind==='indoor'?'#8a7562': s.kind==='underwater'?'#2c5f7a': s.kind==='space'?'#05060c':'#7f8c5c';
+  const hz=L.hz*sy;
+  let g=x.createLinearGradient(0,0,0,hz); g.addColorStop(0,skyTop); g.addColorStop(1,s.kind==='indoor'?'#a8977d':s.weather==='fog'?'#d6d9db':'#e6ecef'); x.fillStyle= s.kind==='space'?'#05060c':g; x.fillRect(0,0,GW,hz);
+  g=x.createLinearGradient(0,hz,0,GH); g.addColorStop(0,ground); g.addColorStop(1,'#3d3a30'); x.fillStyle=g; x.fillRect(0,hz,GW,GH-hz);
+  for(const I of L.inst){
+    const o=plan.objects[I.g]; const h=I.hpx*sy, w=h*aspectOf(o.name); const cx=I.x*sx; const top = I.sky ? I.y*sy-h/2 : I.baseY*sy-h;
+    const base = o.color&&COLORS[o.color] ? COLORS[o.color] : o.material==='gold'?[212,166,60]: o.material==='glass'||o.material==='ice'?[200,228,240]: o.material==='marble'?[230,226,218]: o.material==='wood'?[132,86,48]: [128,124,118];
+    if(!I.sky && !I.flying){ x.save(); x.fillStyle='rgba(0,0,0,.35)'; x.filter='blur(3px)'; x.beginPath(); x.ellipse(cx,top+h,w*0.45,Math.max(2,w*0.07),0,0,Math.PI*2); x.fill(); x.restore(); }
+    x.save(); x.filter='blur(1.5px)';
+    const rg=x.createRadialGradient(cx-w*0.15,top+h*0.3,2,cx,top+h/2,Math.max(w,h)*0.7);
+    rg.addColorStop(0,`rgb(${base.map(v=>clamp(v+45,0,255)).join(',')})`); rg.addColorStop(1,`rgb(${base.map(v=>v*0.6|0).join(',')})`);
+    x.fillStyle=rg; const r=Math.min(w,h)*0.35; x.beginPath(); x.roundRect(cx-w/2,top,w,h,r); x.fill(); x.restore();
   }
-  // no useful alpha: is the border a plain studio backdrop?
-  let mr=0,mg=0,mb=0,n=0; const bpx=[];
-  for(let y=0;y<h;y++) for(let xx=0;xx<w;xx++){ if(!(y<2||xx<2||y>=h-2||xx>=w-2)) continue; const i=(y*w+xx)*4; bpx.push([d[i],d[i+1],d[i+2]]); mr+=d[i];mg+=d[i+1];mb+=d[i+2];n++; }
-  mr/=n;mg/=n;mb/=n; let v=0; for(const p of bpx) v+=(p[0]-mr)**2+(p[1]-mg)**2+(p[2]-mb)**2; const sd=Math.sqrt(v/n/3);
-  if(sd<22 && q.size>150) return {mode:'flood', score:0.55*(1-sd/30), bg:[mr,mg,mb], sd};
-  return {mode:'none',score:0};
-}
-function floodCutout(bmp, bg, sd){
-  const s=Math.min(1,900/Math.max(bmp.width,bmp.height)); const w=Math.round(bmp.width*s), h=Math.round(bmp.height*s);
-  const c=mk(w,h), x=ctx2(c); x.drawImage(bmp,0,0,w,h); const img=x.getImageData(0,0,w,h), d=img.data;
-  const tol=(Math.max(14,sd*3+18))**2; const bgm=new Uint8Array(w*h); const st=[];
-  for(let i=0;i<w;i++){ st.push(i, (h-1)*w+i); } for(let j=0;j<h;j++){ st.push(j*w, j*w+w-1); }
-  while(st.length){ const p=st.pop(); if(bgm[p]) continue; const i=p*4; const dd=(d[i]-bg[0])**2+(d[i+1]-bg[1])**2+(d[i+2]-bg[2])**2; if(dd>tol) continue; bgm[p]=1; const px=p%w, py=(p/w)|0; if(px>0)st.push(p-1); if(px<w-1)st.push(p+1); if(py>0)st.push(p-w); if(py<h-1)st.push(p+w); }
-  const a=new Float32Array(w*h); for(let p=0;p<w*h;p++) a[p]=bgm[p]?0:1; boxBlur(a,w,h,1);
-  let fg=0; for(let p=0;p<w*h;p++){ d[p*4+3]=Math.round(clamp((a[p]-0.15)/0.7,0,1)*255); if(a[p]>0.5) fg++; }
-  // de-fringe: pull edge colours away from the backdrop colour
-  for(let p=0;p<w*h;p++){ const al=d[p*4+3]/255; if(al>0&&al<1){ for(let k=0;k<3;k++) d[p*4+k]=clamp((d[p*4+k]-bg[k]*(1-al))/Math.max(al,0.25),0,255); } }
-  x.putImageData(img,0,0);
-  const frac=fg/(w*h); if(frac<0.06||frac>0.9) return null;
-  return trimAlpha(c);
-}
-function trimAlpha(c){
-  const x=ctx2(c), d=x.getImageData(0,0,c.width,c.height).data; let minX=c.width,minY=c.height,maxX=-1,maxY=-1;
-  for(let y=0;y<c.height;y++) for(let xx=0;xx<c.width;xx++) if(d[(y*c.width+xx)*4+3]>20){ if(xx<minX)minX=xx; if(xx>maxX)maxX=xx; if(y<minY)minY=y; if(y>maxY)maxY=y; }
-  if(maxX<0) return null;
-  // keep only the biggest connected blob's bounding area is costly; bbox trim is enough here
-  const o=mk(maxX-minX+1,maxY-minY+1); o.getContext('2d').drawImage(c,minX,minY,o.width,o.height,0,0,o.width,o.height); return o;
-}
-function alphaCutout(bmp, bbox){
-  const s=Math.min(1,900/Math.max(bmp.width,bmp.height)); const c=mk(bmp.width*s,bmp.height*s); c.getContext('2d').drawImage(bmp,0,0,c.width,c.height);
-  return trimAlpha(c);
-}
-
-// learned library: cutouts that won before get tried first
-function libGet(term){ return (LS.get('assemblage.lib',{})[term]||[]).sort((a,b)=>b.wins-a.wins); }
-function libWin(term,cand){ const lib=LS.get('assemblage.lib',{}); const arr=lib[term]||[]; const e=arr.find(x=>x.url===cand.url); if(e) e.wins++; else arr.push({url:cand.url,title:cand.title,page:cand.page,license:cand.license,author:cand.author,src:cand.src,wins:1}); lib[term]=arr.slice(-12); LS.set('assemblage.lib',lib); }
-
-async function pool(items, n, fn){ const out=new Array(items.length); let k=0; await Promise.all(Array.from({length:Math.min(n,items.length)},async()=>{ while(k<items.length){ const i=k++; try{ out[i]=await fn(items[i],i); }catch(e){ out[i]=null; } } })); return out; }
-async function gatherCandidates(term){
-  const q='"'+term+'"';
-  const jobs=[
-    commonsSearch('intitle:'+q+' filemime:png',30,400),
-    openverseSearch(term,'&extension=png',true),
-    commonsSearch(term+' filemime:png',20,400),
-    commonsSearch('intitle:'+q+' (isolated OR "white background") filemime:jpeg',12,400),
-  ];
-  const res=await Promise.allSettled(jobs); const seen=new Set(); const all=[];
-  res.forEach(r=>{ if(r.status==='fulfilled') r.value.forEach(c=>{ if(!seen.has(c.url)){ seen.add(c.url); all.push(c); } }); });
-  if(res.every(r=>r.status==='rejected')) throw new Error('photo searches unreachable');
-  const words=term.toLowerCase().split(/\s+/);
-  all.forEach(c=>{ const t=(c.title||'').toLowerCase(); c.titleHit=words.every(w=>t.includes(w)||t.includes(singular(w))); });
-  return all.filter(c=>!BAD_TITLES.test(c.title||'')).sort((a,b)=>(b.titleHit-a.titleHit));
-}
-async function screen(c){
-  const bmp=await loadBitmap(c.url); const a=analyzeCutout(bmp); let cut=null, mode=a.mode, q=a.score;
-  if(a.mode==='alpha' && a.score>0.1) cut=alphaCutout(bmp,a.bbox);
-  else if(a.mode==='flood') cut=floodCutout(bmp,a.bg,a.sd);
-  if(!cut||cut.width<12||cut.height<12) return null;
-  if(a.mode==='alpha' && a.score<=0.3) mode='alpha-graphic';
-  return {...c, canvas:cut, quality:q+(c.titleHit?0.25:0)+(c.wins?0.5:0), mode};
-}
-// One picture of all candidates, numbered, so a vision model can say which really show the object.
-function contactSheet(cands){
-  const cols=4, cell=192, rows=Math.ceil(cands.length/cols); const c=mk(cols*cell,rows*cell), x=c.getContext('2d');
-  x.fillStyle='#fff'; x.fillRect(0,0,c.width,c.height);
-  cands.forEach((cd,i)=>{ const cx=(i%cols)*cell, cy=Math.floor(i/cols)*cell; x.fillStyle='#d9d9d9'; x.fillRect(cx+3,cy+3,cell-6,cell-6);
-    const s=Math.min((cell-16)/cd.canvas.width,(cell-16)/cd.canvas.height); const w=cd.canvas.width*s, h=cd.canvas.height*s; x.drawImage(cd.canvas,cx+(cell-w)/2,cy+(cell-h)/2,w,h);
-    x.fillStyle='#000'; x.fillRect(cx+3,cy+3,34,30); x.fillStyle='#fff'; x.font='bold 24px sans-serif'; x.fillText(String(i+1),cx+9,cy+27); });
-  return c.toDataURL('image/jpeg',0.85);
-}
-async function findCutouts(o, want=3){
-  const term=o.search||o.name;
-  let list=[];
-  try{ list=await gatherCandidates(term); }catch(e){ toast('Photo search failed for "'+term+'": '+e.message,'err'); }
-  const lib=libGet(term).map(c=>({...c,titleHit:true}));
-  list=[...lib, ...list.filter(c=>!lib.some(l=>l.url===c.url))].slice(0,28);
-  const screened=(await pool(list,6,screen)).filter(Boolean);
-  // photographs first, graphics last; keep at most 12 for the contact sheet
-  screened.sort((a,b)=>((b.mode!=='alpha-graphic')-(a.mode!=='alpha-graphic')) || (b.quality-a.quality));
-  let cands=screened.slice(0,12);
-  if(!cands.length) return [];
-  if(workerURL() && cfg.useVision){
-    try{
-      const r=await workerPost('/pick',{image:contactSheet(cands),term,n:cands.length});
-      const good=(r.good||[]).map(n=>cands[n-1]).filter(Boolean);
-      if(good.length){ good.forEach(g=>g.verified=true); good.forEach(g=>g.quality+=1); return good.slice(0,want); }
-      toast('None of the '+cands.length+' photos found for "'+term+'" actually showed one. Using the closest match — try a different word.','err',7000);
-      cands.forEach(c=>c.quality-=1);
-    }catch(e){ toast('Photo check skipped for "'+term+'": '+e.message,'err'); }
-  }
-  if(cands[0].mode==='alpha-graphic') toast('Only illustration-style cutouts found for "'+term+'".');
-  return cands.slice(0,want);
-}
-
-// ---------- Backgrounds: Poly Haven HDRIs (360° photos that also tell us where the light is) ----------
-let phAssets=null;
-async function polyHavenList(){
-  if(phAssets) return phAssets;
-  const cached=LS.get('assemblage.ph',null);
-  if(cached && Date.now()-cached.t<7*864e5){ phAssets=cached.d; return phAssets; }
-  const j=await xfetch('https://api.polyhaven.com/assets?t=hdris','json');
-  phAssets=Object.entries(j).map(([id,a])=>({id,name:a.name,cats:a.categories||[],tags:a.tags||[]}));
-  LS.set('assemblage.ph',{t:Date.now(),d:phAssets});
-  return phAssets;
-}
-function scoreHdri(a, s){
-  const words=new Set([...(s.tags||[]), ...String(s.query||'').split(/\s+/)].map(w=>singular(w.toLowerCase())).filter(w=>w.length>2));
-  const bag=new Set([...a.cats,...a.tags,...a.name.toLowerCase().split(/[\s_]+/)].map(w=>singular(String(w).toLowerCase())));
-  let sc=0; words.forEach(w=>{ if(bag.has(w)) sc+=2; });
-  const has=k=>bag.has(k);
-  if(s.kind==='indoor') sc+= has('indoor')?2:-3; else sc+= has('outdoor')?1: has('indoor')?-3:0;
-  if(s.time==='night') sc+= has('night')?4:-2; else if(has('night')) sc-=4;
-  if(s.time==='sunset'||s.time==='sunrise') sc+= has('sunrise-sunset')||has('sunset')||has('sunrise')?3:0;
-  if(s.time==='overcast'||s.weather==='fog'||s.weather==='rain') sc+= has('overcast')||has('low contrast')?2:0;
-  if(s.time==='day'&&s.weather==='clear') sc+= has('clear')||has('midday')||has('partly cloudy')?1:0;
-  if(s.weather==='snow') sc+= has('snow')||has('winter')?3:0;
-  return sc;
-}
-// Find the sun (or the brightest light) in the equirectangular panorama.
-function findLight(src){
-  const w=256,h=128, c=mk(w,h), x=ctx2(c); x.drawImage(src,0,0,w,h); const d=x.getImageData(0,0,w,h).data;
-  const L=new Float32Array(w*h); for(let i=0;i<w*h;i++) L[i]=lum(d[i*4],d[i*4+1],d[i*4+2]);
-  const sorted=Array.from(L).sort((a,b)=>a-b); const med=sorted[(w*h/2)|0], thr=sorted[Math.floor(w*h*0.997)];
-  let sx=0,sy=0,sv=0,top=0,nt=0; for(let i=0;i<w*h;i++) if(L[i]>=thr){ const u=(i%w)/w, v=((i/w)|0)/h; const ph=(u-0.5)*2*Math.PI; sx+=Math.cos(ph)*L[i]; sy+=Math.sin(ph)*L[i]; sv+=v*L[i]; top+=L[i]; nt++; }
-  const az=Math.atan2(sy,sx), el=(0.5-sv/top)*Math.PI; const ratio=(top/nt)/Math.max(8,med);
-  const mx=sorted[w*h-1]; let bright=0; for(let i=0;i<w*h;i++) if(L[i]>=mx*0.97) bright++;
-  const compact = mx>235 && bright/(w*h)<0.004;
-  return {az, el:clamp(el,0.05,1.4), hard: clamp((ratio-1.3)/1.2,0,1)*(compact?1:0.4)};
-}
-function reproject(src, W, H, fov, yaw, horizon){
-  const sw=src.width, sh=src.height; const sc=mk(sw,sh), sx=ctx2(sc); sx.drawImage(src,0,0); const S=sx.getImageData(0,0,sw,sh).data;
-  const out=new ImageData(W,H), D=out.data; const f=W/(2*Math.tan(fov/2)); const p=Math.atan((horizon-0.5)*H/f), cp=Math.cos(p), sp=Math.sin(p);
-  for(let y=0;y<H;y++){ const dy=-(y-H/2)/f; for(let x=0;x<W;x++){ const dx=(x-W/2)/f; const yy=dy*cp+sp, zz=-dy*sp+cp; const ph=yaw+Math.atan2(dx,zz), th=Math.atan2(yy,Math.hypot(dx,zz));
-    let u=(ph/(2*Math.PI)+0.5)%1; if(u<0)u+=1; const v=clamp(0.5-th/Math.PI,0,0.9999); const fx=u*sw-0.5, fy=v*sh-0.5; const x0=Math.floor(fx), y0=clamp(Math.floor(fy),0,sh-1), y1=clamp(y0+1,0,sh-1), ax=fx-x0, ay=fy-y0; const xa=((x0%sw)+sw)%sw, xb=(xa+1)%sw;
-    const o=(y*W+x)*4; for(let k=0;k<3;k++){ const a=S[(y0*sw+xa)*4+k], b=S[(y0*sw+xb)*4+k], c=S[(y1*sw+xa)*4+k], e=S[(y1*sw+xb)*4+k]; D[o+k]=(a*(1-ax)+b*ax)*(1-ay)+(c*(1-ax)+e*ax)*ay; } D[o+3]=255; } }
-  const c=mk(W,H); c.getContext('2d').putImageData(out,0,0); return c;
-}
-function timeMatches(a,s){ const bag=[...a.cats,...a.tags].join(' '); if(s.time==='night') return /night/.test(bag); if(s.time==='sunset'||s.time==='sunrise') return /sunset|sunrise|dusk|dawn/.test(bag); return !/night/.test(bag); }
-// Day-for-night and golden-hour grades: the old film trick for when no matching photo exists
-function timeGrade(c, time){
-  const x=ctx2(c), img=x.getImageData(0,0,c.width,c.height), d=img.data;
-  for(let i=0;i<d.length;i+=4){ const r=d[i],g=d[i+1],b=d[i+2], l=lum(r,g,b);
-    if(time==='night'){ const k=0.22+0.25*Math.pow(l/255,2); d[i]=(r*0.35+l*0.65)*k*0.75; d[i+1]=(g*0.35+l*0.65)*k*0.9; d[i+2]=Math.min(255,(b*0.35+l*0.65)*k*1.35+6); }
-    else { d[i]=clamp(r*1.12+18,0,255); d[i+1]=clamp(g*0.98+4,0,255); d[i+2]=clamp(b*0.78,0,255); }
-  }
-  x.putImageData(img,0,0);
-}
-async function findBackground(plan){
-  const s=plan.setting; const opts=[];
-  if(s.kind==='space'){ return {kind:'space'}; }
-  if(s.kind!=='underwater'){
-    try{
-      const list=await polyHavenList(); const ranked=list.map(a=>({a,sc:scoreHdri(a,s)})).sort((x,y)=>y.sc-x.sc);
-      const strongMatch = !s.query || ranked[0].sc>=4;
-      if(strongMatch){
-        for(const {a} of ranked.slice(0,3)){
-          try{ const url=`https://cdn.polyhaven.com/asset_img/primary/${a.id}.png?width=${cfg.hdBg?4096:2048}`; const bmp=await loadBitmap(url);
-            if(Math.abs(bmp.width/bmp.height-2)>0.1) continue; opts.push({kind:'hdri',bmp,id:a.id,name:a.name,url,timeOK:timeMatches(a,s)}); credit(url,{title:a.name+' (HDRI)',page:'https://polyhaven.com/a/'+a.id,license:'CC0',author:'Poly Haven'}); if(opts.length>=2) break; }catch(e){}
-        }
-      }
-    }catch(e){ toast('Poly Haven unavailable — using photo backgrounds ('+e.message+')'); }
-  }
-  if(!opts.length && (s.query||s.kind==='underwater')){
-    const q=(s.query||'underwater')+(s.kind==='indoor'?' interior':'');
-    let list=[]; try{ list=await commonsSearch(q+' filemime:jpeg',20,1280); }catch(e){ toast('Background search failed: '+e.message,'err'); }
-    list=list.filter(c=>c.w/c.h>1.25 && !BAD_TITLES.test(c.title));
-    for(const c of list.slice(0,6)){ try{ const bmp=await loadBitmap(c.url); opts.push({kind:'photo',bmp,url:c.url}); credit(c.url,c); if(opts.length>=2) break; }catch{} }
-  }
-  if(!opts.length){
-    // last resort: any outdoor HDRI
-    try{ const list=await polyHavenList(); const a=list.find(x=>x.cats.includes('outdoor')); const url=`https://cdn.polyhaven.com/asset_img/primary/${a.id}.png?width=2048`; const bmp=await loadBitmap(url); opts.push({kind:'hdri',bmp,id:a.id,url}); credit(url,{title:a.name+' (HDRI)',page:'https://polyhaven.com/a/'+a.id,license:'CC0',author:'Poly Haven'}); toast('No close background match — using a general outdoor scene.'); }catch{}
-  }
-  return opts.length? {kind:'list',opts} : {kind:'procedural'};
-}
-// Build the actual backdrop canvas for one variant + the scene lighting description
-function prepareBackground(bgInfo, plan, variant, rng){
-  const s=plan.setting; const fov=60*Math.PI/180; const horizon=0.55;
-  const scene={fov,horizon,kind:s.kind,time:s.time,weather:s.weather};
-  let canvas;
-  if(bgInfo.kind==='list'){
-    const o=bgInfo.opts[variant%bgInfo.opts.length];
-    if(o.kind==='hdri'){
-      const L=o.light||(o.light=findLight(o.bmp));
-      const side=(variant%2?1:-1); const rel=side*(variant>=2?0.55:2.1); // front-side light or rim light
-      const yaw=L.az-rel;
-      canvas=reproject(o.bmp,W,H,fov,yaw,horizon);
-      scene.light={x:Math.sin(rel)*Math.cos(L.el), y:Math.sin(L.el), fwd:Math.cos(rel)*Math.cos(L.el), el:L.el, rel, hard:(s.time==='overcast'||s.weather!=='clear'||s.time==='night')?Math.min(0.15,L.hard):L.hard};
-    } else {
-      canvas=mk(W,H); const x=canvas.getContext('2d'); const sc=Math.max(W/o.bmp.width,H/o.bmp.height); const dw=o.bmp.width*sc, dh=o.bmp.height*sc; x.drawImage(o.bmp,(W-dw)/2,(H-dh)/2,dw,dh);
-      // light from the brighter side of the photo
-      const d=ctx2(canvas).getImageData(0,0,W,H).data; let l=0,r=0; for(let y=0;y<H;y+=8) for(let xx=0;xx<W;xx+=8){ const v=lum(d[(y*W+xx)*4],d[(y*W+xx)*4+1],d[(y*W+xx)*4+2]); if(xx<W/2) l+=v; else r+=v; }
-      const lx=clamp((r-l)/(r+l+1)*4,-0.9,0.9);
-      scene.light={x:lx,y:0.6,fwd:-0.5,el:0.7,rel:Math.asin(clamp(lx,-1,1)),hard:0.12};
-      scene.horizon=0.5;
-    }
-  } else if(bgInfo.kind==='space'){
-    canvas=mk(W,H); const x=canvas.getContext('2d'); x.fillStyle='#02030a'; x.fillRect(0,0,W,H);
-    for(let i=0;i<1400;i++){ const b=rng()**3; x.fillStyle=`rgba(${200+55*rng()|0},${200+55*rng()|0},255,${0.2+0.8*b})`; const r=b*1.6+0.3; x.fillRect(rng()*W,rng()*H,r,r); }
-    const g=x.createRadialGradient(W*0.7,H*0.3,10,W*0.7,H*0.3,W*0.6); g.addColorStop(0,'rgba(120,80,160,.25)'); g.addColorStop(1,'rgba(0,0,0,0)'); x.fillStyle=g; x.fillRect(0,0,W,H);
-    scene.light={x:0.8,y:0.3,fwd:-0.3,el:0.3,rel:1.2,hard:0.9}; scene.horizon=1.4; scene.noGround=true;
-  } else {
-    canvas=mk(W,H); const x=canvas.getContext('2d'); const g=x.createLinearGradient(0,0,0,H); const night=s.time==='night';
-    g.addColorStop(0,night?'#0b1430':'#7fa8d8'); g.addColorStop(horizon,night?'#28304a':'#dfe7ee'); g.addColorStop(horizon+0.001,night?'#1a1c1e':'#7d7a62'); g.addColorStop(1,night?'#0e0f10':'#4b4a3a'); x.fillStyle=g; x.fillRect(0,0,W,H);
-    scene.light={x:0.6,y:0.7,fwd:-0.4,el:0.8,rel:2.1,hard:0.5};
-    toast('Using a simple painted backdrop — no background photo could be loaded.','err');
-  }
-  if(bgInfo.kind==='list' && (plan.setting.time==='night'||plan.setting.time==='sunset'||plan.setting.time==='sunrise')){ const o=bgInfo.opts[variant%bgInfo.opts.length]; if(!o.timeOK){ timeGrade(canvas, plan.setting.time==='night'?'night':'warm'); if(plan.setting.time==='night'&&scene.light) scene.light.hard*=0.3; } }
-  // scene statistics used for harmonising the objects
-  const d=ctx2(canvas).getImageData(0,0,W,H).data; let r=0,g=0,b=0,n=0, hr=0,hg=0,hb=0,hn=0; const hy=Math.round(clamp(scene.horizon,0.05,0.95)*H);
-  for(let y=0;y<H;y+=6) for(let xx=0;xx<W;xx+=6){ const i=(y*W+xx)*4; r+=d[i];g+=d[i+1];b+=d[i+2];n++; if(Math.abs(y-hy)<H*0.08){ hr+=d[i];hg+=d[i+1];hb+=d[i+2];hn++; } }
-  scene.mean=[r/n,g/n,b/n]; scene.meanLum=lum(r/n,g/n,b/n); scene.hazeCol= hn?[hr/hn,hg/hn,hb/hn]:scene.mean;
-  return {canvas, scene};
-}
-
-// ---------- Per-object processing: colour, material, harmonise, relight, haze, light wrap ----------
-function processSprite(src, w, h, o, scene, place, bgCanvas){
-  w=Math.max(4,Math.round(w)); h=Math.max(4,Math.round(h));
-  const c=mk(w,h), x=ctx2(c); x.imageSmoothingQuality='high'; x.drawImage(src,0,0,w,h);
-  const img=x.getImageData(0,0,w,h), d=img.data, N=w*h;
-  // local background stats under the object
-  const bx=clamp(Math.round(place.left),0,W-1), by=clamp(Math.round(place.top),0,H-1), bw=clamp(Math.round(w),1,W-bx), bh=clamp(Math.round(h),1,H-by);
-  const bd=ctx2(bgCanvas).getImageData(bx,by,bw,bh).data; let br=0,bg=0,bb=0,bn=0; for(let i=0;i<bd.length;i+=16){ br+=bd[i];bg+=bd[i+1];bb+=bd[i+2];bn++; } br/=bn;bg/=bn;bb/=bn; const bL=lum(br,bg,bb);
-  // object mean luminance
-  let mL=0,an=0; for(let p=0;p<N;p++){ const a=d[p*4+3]; if(a>30){ mL+=lum(d[p*4],d[p*4+1],d[p*4+2]); an++; } } mL=an?mL/an:128;
-  // 1) colour from the prompt (keeps the photo's shading, swaps hue)
-  const col=o.color&&COLORS[o.color];
-  if(col){ const [Ht,St,Lt]=rgbToHsl(...col); const ach=St<0.08; for(let p=0;p<N;p++){ if(d[p*4+3]<8) continue; const l=lum(d[p*4],d[p*4+1],d[p*4+2])/255; const nl=clamp(l+(Lt-mL/255)*0.9,0.02,0.98); const [r,g,b]=hslToRgb(Ht,ach?0:Math.min(1,St*1.05),nl); d[p*4]=r*0.92+d[p*4]*0.08; d[p*4+1]=g*0.92+d[p*4+1]*0.08; d[p*4+2]=b*0.92+d[p*4+2]*0.08; } }
-  // 2) material
-  const mat=o.material;
-  if(mat){
-    const tint={gold:[212,166,60],bronze:[176,110,60],silver:[200,205,212],metal:[150,155,162],wood:[132,86,48],stone:[132,128,120],marble:[226,222,214],ice:[190,225,240],glass:[205,225,235],paper:[238,234,224],neon:null}[mat];
-    for(let p=0;p<N;p++){ if(d[p*4+3]<8) continue; let l=lum(d[p*4],d[p*4+1],d[p*4+2])/255;
-      if(mat==='gold'||mat==='bronze'||mat==='silver'||mat==='metal'){ l=clamp((l-0.5)*1.6+0.5,0,1); const spec=Math.pow(l,6)*0.8; for(let k=0;k<3;k++) d[p*4+k]=clamp(tint[k]*(0.25+1.0*l)+255*spec,0,255); }
-      else if(mat==='wood'){ const grain=0.85+0.15*Math.sin(((p%w)*0.15+Math.sin((p/w)*0.05)*6)); for(let k=0;k<3;k++) d[p*4+k]=tint[k]*(0.45+0.9*l)*grain; }
-      else if(mat==='stone'||mat==='marble'){ const n=(Math.random()-0.5)*(mat==='stone'?40:12); for(let k=0;k<3;k++) d[p*4+k]=clamp(tint[k]*(0.5+0.75*l)+n,0,255); }
-      else if(mat==='paper'){ for(let k=0;k<3;k++) d[p*4+k]=tint[k]*(0.65+0.4*l); }
-      else if(mat==='glass'||mat==='ice'){ for(let k=0;k<3;k++) d[p*4+k]=clamp(tint[k]*(0.6+0.6*l)+255*Math.pow(l,5)*0.7,0,255); }
-      else if(mat==='neon'){ for(let k=0;k<3;k++) d[p*4+k]=clamp(d[p*4+k]*1.4+40,0,255); }
-    }
-  }
-  // 3) relight: fake surface normals from the silhouette (blurred alpha = a rounded "height" map)
-  const A=new Float32Array(N); for(let p=0;p<N;p++) A[p]=d[p*4+3]/255;
-  const Hm=boxBlur(Float32Array.from(A),w,h,Math.max(2,Math.min(w,h)*0.07)); boxBlur(Hm,w,h,Math.max(2,Math.min(w,h)*0.05));
-  const Ab=boxBlur(Float32Array.from(A),w,h,Math.max(1,Math.min(w,h)*0.02));
-  const Lx=scene.light.x, Ly=-scene.light.y, Lz=Math.max(0.15,-scene.light.fwd); const ln=Math.hypot(Lx,Ly,Lz)||1;
-  const k=Math.min(w,h)*0.9, relight=0.25+0.45*scene.light.hard; const night=scene.time==='night';
-  // harmonise: pull object exposure & colour cast towards the scene
-  const tgtL = mL + (bL - mL)*(col?0.18:0.38); const gain=clamp(tgtL/Math.max(mL,1),0.35,1.6);
-  const cm=Math.max(1,(scene.mean[0]+scene.mean[1]+scene.mean[2])/3); const cast=[Math.pow(scene.mean[0]/cm,0.3),Math.pow(scene.mean[1]/cm,0.3),Math.pow(scene.mean[2]/cm,0.3)];
-  // haze by distance (Koschmieder): far things fade into the horizon colour
-  const vis={clear:2500,haze:500,fog:45,rain:260,snow:180}[scene.weather]||2500; const hz=place.sky?0:clamp(1-Math.exp(-place.z/vis),0,0.92);
-  const wrapCol=[br,bg,bb];
-  for(let y=0;y<h;y++) for(let xx=0;xx<w;xx++){ const p=y*w+xx; if(d[p*4+3]<4) continue;
-    const gx=(Hm[y*w+clamp(xx+1,0,w-1)]-Hm[y*w+clamp(xx-1,0,w-1)])*k*0.5, gy=(Hm[clamp(y+1,0,h-1)*w+xx]-Hm[clamp(y-1,0,h-1)*w+xx])*k*0.5;
-    const nx=-gx, ny=-gy, nz=1; const nn=Math.hypot(nx,ny,nz); const dot=(nx*Lx+ny*Ly+nz*Lz)/(nn*ln);
-    const shade=1+relight*(clamp(dot,0,1)*1.15-0.55);
-    const edge=clamp((A[p]-Ab[p])*4+ (1-Ab[p])*0.8,0,1)*0.45; // rim pixels pick up the backdrop (light wrap)
-    for(let k2=0;k2<3;k2++){ let v=d[p*4+k2]*gain*cast[k2]*shade; if(night) v*= k2===2?0.95:0.82; v=v*(1-edge)+wrapCol[k2]*edge; v=v*(1-hz)+scene.hazeCol[k2]*hz; d[p*4+k2]=clamp(v,0,255); }
-    if(mat==='glass'||mat==='ice'){ const rim=clamp((1-Ab[p])*3,0,1); d[p*4+3]=d[p*4+3]*(0.38+0.55*rim); }
-  }
-  x.putImageData(img,0,0);
   return c;
 }
 
-// ---------- Compose one variant ----------
-function silhouette(sp){ const c=mk(sp.width,sp.height), x=c.getContext('2d'); x.drawImage(sp,0,0); x.globalCompositeOperation='source-in'; x.fillStyle='#000'; x.fillRect(0,0,c.width,c.height); return c; }
-function compose(plan, bg, choice, variant, opt={}){
-  const rng=seeded(1234+variant*7919+(opt.seedBump||0));
-  const {canvas:bgc, scene}=prepareBackground(bg, plan, variant, rng);
-  const aspects=plan.objects.map((o,g)=>{ const c=choice[g]; return c? c.canvas.width/c.canvas.height : 1; });
-  const L=solveLayout(plan, aspects, W, H, scene, rng);
-  if(opt.scaleBoost) L.inst.forEach(I=>{ const b=opt.scaleBoost[I.g]; if(b){ I.hpx*=b; I.wpx*=b; } });
-  const out=mk(W,H), x=out.getContext('2d'); const mask=mk(W,H), mx=mask.getContext('2d');
-  // depth of field: background softness depends on focus distance
-  const dof=(z)=> clamp(2.2*Math.abs(1-L.zFocus/Math.max(z,0.01)),0,5);
-  x.filter=`blur(${dof(1e6).toFixed(1)}px)`; x.drawImage(bgc,0,0); x.filter='none';
-  const lt=scene.light; const tanEl=Math.tan(clamp(lt.el,0.12,1.4));
-  for(const I of L.inst){
-    const cand=choice[I.g]; const o=plan.objects[I.g];
-    if(!cand){ continue; }
-    const h=I.hpx, w=h*(cand.canvas.width/cand.canvas.height);
-    const left= I.sky? I.x-w/2 : I.x-w/2, top= I.sky? I.y-h/2 : I.baseY-h;
-    if(left>W||left+w<0||top>H||top+h<-H) continue;
-    const sp=processSprite(cand.canvas, w, h, o, scene, {left,top,z:I.z,sky:I.sky}, bgc);
-    // shadows: projected silhouette, physically derived from sun direction and camera height
-    if(!I.sky && !scene.noGround){
-      const sil=silhouette(sp); const by=I.baseY; const lift=I.flying? Math.max(0,(L.hz + L.f*L.camH/I.z) - by) : 0; const gy=by+lift;
-      if(lt.hard>0.18 && lift<H*0.4){
-        let a=-Math.sin(lt.rel)/tanEl, b=Math.cos(lt.rel)*(L.camH/I.z)/tanEl; a=clamp(a,-2.5,2.5); if(Math.abs(b)<0.05) b=0.05*Math.sign(b||1); b=clamp(b,-0.9,0.9);
-        x.save(); x.globalAlpha=clamp(0.62*lt.hard,0,0.6)*(I.flying?0.5:1); x.filter=`blur(${(1.5+h*0.012+lift*0.03).toFixed(1)}px)`;
-        x.setTransform(1,0,-a,-b,a*by,gy+ b*by); x.drawImage(sil,left,top,w,h); x.restore();
-      }
-      // contact / ambient-occlusion shadow
-      if(!I.flying || lift<h*0.6){ x.save(); const rw=w*0.42, rh=Math.max(2,w*0.06); const g=x.createRadialGradient(I.x,gy,1,I.x,gy,rw); g.addColorStop(0,`rgba(0,0,0,${I.flying?0.18:0.5})`); g.addColorStop(1,'rgba(0,0,0,0)'); x.translate(I.x,gy); x.scale(1,rh/rw); x.translate(-I.x,-gy); x.fillStyle=g; x.beginPath(); x.arc(I.x,gy,rw,0,Math.PI*2); x.fill(); x.restore(); }
-    }
-    x.save();
-    const blur=I.sky?0:dof(I.z); if(blur>0.4) x.filter=`blur(${blur.toFixed(1)}px)`;
-    if(o.material==='neon'){ x.shadowColor= o.color&&COLORS[o.color]? `rgb(${COLORS[o.color].join(',')})` : '#ff4fd8'; x.shadowBlur=h*0.15; }
-    if(I.sky && (o.name==='moon'||o.name==='sun'||o.name==='planet')) x.globalCompositeOperation='screen';
-    x.drawImage(sp,left,top,w,h); x.restore();
-    mx.drawImage(sp,left,top,w,h);
-  }
-  weather(x, scene, rng);
-  cameraPass(x, scene, rng);
-  return {canvas:out, mask, layout:L, scene};
+// ---------- Rendering and checking ----------
+async function render(prompt, seed, guideURL, editURL){
+  const t0=performance.now();
+  const blob=await workerPost('/render',{prompt,seed,w:W,h:H,guide:editURL?undefined:guideURL,image:editURL},'blob');
+  const bmp=await createImageBitmap(blob);
+  return {bmp, blob, ms:performance.now()-t0};
 }
-function weather(x, scene, rng){
-  const hz=scene.horizon*H, hc=scene.hazeCol.map(v=>v|0).join(',');
-  if(scene.weather==='fog'||scene.weather==='haze'){ const g=x.createLinearGradient(0,0,0,H); const a=scene.weather==='fog'?0.42:0.18; g.addColorStop(0,`rgba(${hc},${a*0.6})`); g.addColorStop(clamp(scene.horizon,0.05,0.95),`rgba(${hc},${a})`); g.addColorStop(1,`rgba(${hc},${a*0.35})`); x.fillStyle=g; x.fillRect(0,0,W,H); }
-  if(scene.weather==='rain'){ x.save(); x.strokeStyle='rgba(220,230,240,.22)'; x.lineWidth=1; for(let i=0;i<700;i++){ const px=rng()*W, py=rng()*H, l=8+rng()*16; x.beginPath(); x.moveTo(px,py); x.lineTo(px-l*0.18,py+l); x.stroke(); } x.restore(); }
-  if(scene.weather==='snow'){ x.save(); for(let i=0;i<600;i++){ const r=rng()**2*2.6+0.4; x.fillStyle=`rgba(255,255,255,${0.35+0.5*rng()})`; x.beginPath(); x.arc(rng()*W,rng()*H,r,0,Math.PI*2); x.fill(); } x.restore(); }
-}
-function cameraPass(x, scene, rng){
-  const img=x.getImageData(0,0,W,H), d=img.data; const night=scene.time==='night';
-  const grain= night?11:6;
-  for(let y=0;y<H;y++){ const vy=(y/H-0.5); for(let xx=0;xx<W;xx++){ const i=(y*W+xx)*4; const vx=(xx/W-0.5); const vig=1-0.32*Math.pow(vx*vx+vy*vy,1.1)*2.2; const n=(rng()-0.5)*grain;
-    for(let k=0;k<3;k++){ let v=d[i+k]/255; v=v+(v-0.5)*0.08 - 0.08*v*(1-v)*(v-0.5); d[i+k]=clamp(v*255*vig+n,0,255); } } }
-  x.putImageData(img,0,0);
-}
-
-// ---------- Checks: local self-check + optional vision model ----------
-function downscaleJPEG(c, maxW=512){ const s=maxW/c.width; const t=mk(c.width*s,c.height*s); t.getContext('2d').drawImage(c,0,0,t.width,t.height); return t.toDataURL('image/jpeg',0.82); }
-async function scoreVariant(plan, checklist, v, useVision){
-  const local=verifyLayout(plan, v.layout, W, H);
-  v.checks=checklist.map(c=>{ const m=local.find(l=>l.kind===c.kind && (c.rel? l.rel===c.rel : l.g===c.g)); return {...c, local: m? m.ok : null, vision:null}; });
-  if(useVision){
-    try{ const r=await workerPost('/vision',{image:downscaleJPEG(v.canvas),questions:checklist.map(c=>c.q)}); (r.answers||[]).forEach((a,i)=>{ if(v.checks[i]) v.checks[i].vision=!!a; }); v.visionModel=r.model; }
-    catch(e){ v.visionErr=e; }
-  }
-  let s=0,n=0; v.checks.forEach(c=>{ const val= c.vision!=null? (c.local===false? (c.vision?0.5:0) : (c.vision?1:0)) : (c.local!=null? (c.local?1:0) : null); c.verdict=val; if(val!=null){ s+=val; n++; } });
-  v.score = n? s/n : 0.5;
-  v.rank = v.score + 0.04*(v.quality||0); // small tie-breaker for cleaner cutouts
+async function score(plan, checklist, v){
+  v.checks=checklist.map(c=>({...c,verdict:null}));
+  if(!cfg.useVision){ v.score=0.5; return v; }
+  try{
+    const r=await workerPost('/vision',{image:toJPEG(v.bmp,512,344,0.85),questions:checklist.map(c=>c.q)});
+    (r.answers||[]).forEach((a,i)=>{ if(v.checks[i]) v.checks[i].verdict=a?1:0; });
+    v.visionModel=r.model;
+  }catch(e){ v.visionErr=e; }
+  const done=v.checks.filter(c=>c.verdict!=null);
+  // presence and realism count double: a picture missing its subject should never win
+  let s=0,n=0; done.forEach(c=>{ const wt=(c.kind==='presence'||c.kind==='realism')?2:1; s+=c.verdict*wt; n+=wt; });
+  v.score = n? s/n : 0;
   return v;
 }
 
-// ---------- Polish: one light img2img pass, then keep the photo's detail and protect the prompt's key objects ----------
-async function polishVariant(plan, prompt, v){
-  const sw=504, sh=336; const t=mk(sw,sh); t.getContext('2d').drawImage(v.canvas,0,0,sw,sh);
-  const blob=await workerPost('/polish',{image:t.toDataURL('image/jpeg',0.9),prompt},'blob');
-  const bmp=await createImageBitmap(blob);
-  const up=mk(W,H), ux=ctx2(up); ux.imageSmoothingQuality='high'; ux.drawImage(bmp,0,0,W,H);
-  const blur=mk(W,H), bx=ctx2(blur); bx.filter='blur(2px)'; bx.drawImage(v.canvas,0,0); bx.filter='none';
-  const P=ux.getImageData(0,0,W,H), O=ctx2(v.canvas).getImageData(0,0,W,H).data, B=bx.getImageData(0,0,W,H).data, M=ctx2(v.mask).getImageData(0,0,W,H).data;
-  const pd=P.data; const mix=clamp(cfg.pstr*2,0.15,1); const protect = plan.objects.some(o=>o.color||o.material) ? 0.5 : 0.25;
-  for(let i=0;i<pd.length;i+=4){ const m=M[i+3]/255*protect; for(let k=0;k<3;k++){ const detail=O[i+k]-B[i+k]; let val=pd[i+k]+detail*0.4; val=O[i+k]*(1-mix)+val*mix; val=val*(1-m)+O[i+k]*m; pd[i+k]=clamp(val,0,255); } }
-  const out=mk(W,H); out.getContext('2d').putImageData(P,0,0);
-  return out;
-}
-
-// ---------- UI rendering ----------
+// ---------- UI ----------
+let current=null;
 function showChecks(v){
   if(!v||!v.checks){ $('checks').textContent='–'; $('score').textContent='–'; return; }
-  $('score').textContent=Math.round(clamp(v.score,0,1)*100)+'%';
-  $('checks').innerHTML=v.checks.map(c=>{ const cls=c.verdict==null?'unk':c.verdict>=0.75?'yes':c.verdict>0?'unk':'no'; const sym=c.verdict==null?'?':c.verdict>=0.75?'✓':c.verdict>0?'~':'✕'; const src=c.vision!=null?'vision':c.local!=null?'layout':'unchecked'; return `<div class="check ${cls}"><b>${sym}</b><span>${c.q} <span class="hint">(${src})</span></span></div>`; }).join('');
+  $('score').textContent= v.checks.some(c=>c.verdict!=null) ? Math.round(v.score*100)+'%' : '?';
+  $('checks').innerHTML=v.checks.map(c=>{ const cls=c.verdict==null?'unk':c.verdict?'yes':'no'; const sym=c.verdict==null?'?':c.verdict?'✓':'✕'; return `<div class="check ${cls}"><b>${sym}</b><span>${c.q}</span></div>`; }).join('');
 }
-function showCredits(){
-  const items=[...credits.values()];
-  const ph=items.some(i=>/Poly Haven/.test(i.author||''));
-  $('credits').innerHTML='<strong>Image credits</strong><br>'+(items.length? items.map(i=>`<a href="${i.page||'#'}" target="_blank" rel="noopener">${(i.title||'image').replace(/</g,'&lt;').slice(0,60)}</a> — ${(i.author||'unknown').replace(/</g,'&lt;')} · ${i.license||'see source'}`).join('<br>') : 'none yet')+(ph?'<br>Backgrounds powered by Poly Haven.':'');
-}
-let current=null;
 function showVariant(v, all){
-  current=v; const o=$('out').getContext('2d'); o.drawImage(v.final||v.canvas,0,0); $('empty').style.display='none'; $('dl').disabled=false; showChecks(v);
-  if(all){ $('thumbs').innerHTML=''; all.forEach(a=>{ const t=mk(192,128); t.getContext('2d').drawImage(a.final||a.canvas,0,0,192,128); if(a===v) t.className='sel'; t.title=Math.round(a.score*100)+'%'; t.onclick=()=>{ showVariant(a,all); }; $('thumbs').appendChild(t); }); }
+  current=v; const o=$('out').getContext('2d'); o.fillStyle='#000'; o.fillRect(0,0,$('out').width,$('out').height); o.drawImage(v.bmp,0,0,$('out').width,$('out').height);
+  $('empty').style.display='none'; $('dl').disabled=false; showChecks(v);
+  if(all){ $('thumbs').innerHTML=''; all.forEach(a=>{ const t=mk(192,129); t.getContext('2d').drawImage(a.bmp,0,0,192,129); if(a===v) t.className='sel'; t.title=(a.label||'')+' '+Math.round(a.score*100)+'%'; t.onclick=()=>showVariant(a,all); $('thumbs').appendChild(t); }); }
 }
 
 // ---------- Main pipeline ----------
@@ -832,71 +528,63 @@ let busy=false;
 async function run(){
   if(busy) return; const prompt=$('prompt').value.trim();
   if(!prompt){ toast('Type a description first.','err'); return; }
-  busy=true; $('go').disabled=true; $('go').textContent='Assembling…'; resetSteps(); credits.clear();
-  const hasW=!!workerURL(); const t0=performance.now();
+  if(!workerURL()){ toast('Add your Worker URL in settings first — rendering runs there.','err',6000); $('gearBtn').click(); return; }
+  busy=true; $('go').disabled=true; $('go').textContent='Working…'; resetSteps();
+  const t0=performance.now();
   try{
     // 1 plan
     step(0,'run'); let plan;
-    if(hasW){ try{ const r=await workerPost('/plan',{prompt}); plan=normalizePlan(r.plan,prompt); step(0,'done','Workers AI ('+String(r.model||'').split('/').pop()+')'); }
-      catch(e){ plan=parsePrompt(prompt); step(0,'done','built-in parser'); toast((e.status===429?'Daily AI allowance used up':'AI planner failed: '+e.message)+' — using the built-in parser.','err'); } }
-    else { plan=parsePrompt(prompt); step(0,'done','built-in parser'); }
-    if(!plan.objects.length){ step(0,'fail','no objects found'); throw new Error('I could not find any objects in that description. Try naming a thing, e.g. "a fox in a snowy forest".'); }
+    try{ const r=await workerPost('/plan',{prompt}); plan=normalizePlan(r.plan,prompt); step(0,'done',String(r.model||'').split('/').pop()); }
+    catch(e){ if(e.status===429) throw new Error('Daily AI allowance used up — try again tomorrow or raise DAILY_CAP.'); plan=parsePrompt(prompt); step(0,'done','built-in parser'); toast('AI planner failed ('+e.message+') — using the built-in parser.','err'); }
+    if(!plan.objects.length) throw new Error('I could not find any objects in that description. Try naming a thing, e.g. "a fox in a snowy forest".');
     $('planView').textContent=JSON.stringify(plan,null,1);
     const checklist=buildChecklist(plan);
-    $('checks').innerHTML=checklist.map(c=>`<div class="check unk"><b>·</b><span>${c.q}</span></div>`).join('');
-    // 2 + 3 in parallel
-    step(1,'run'); step(2,'run');
-    const bgP=findBackground(plan).then(b=>{ step(1, b.kind==='procedural'?'fail':'done', b.kind==='list'? (b.opts[0].kind==='hdri'?'360° photo: '+(b.opts[0].name||b.opts[0].id):'photo') : b.kind); return b; });
-    const cutP=Promise.all(plan.objects.map(o=>findCutouts(o,3).catch(e=>{ toast('Search failed for '+o.name+': '+e.message,'err'); return []; })));
-    const [bg, cands]=await Promise.all([bgP,cutP]);
-    const missing=plan.objects.filter((o,g)=>!cands[g].length).map(o=>o.name);
-    step(2, missing.length===plan.objects.length?'fail':'done', missing.length? 'none found for: '+missing.join(', ') : cands.map((c,g)=>plan.objects[g].name+' ×'+c.length+(c[0]&&c[0].verified?' ✓checked':'')).join(', '));
-    if(missing.length) toast('No usable photo cutouts found for: '+missing.join(', ')+'. Try a more common word for it.','err',7000);
-    if(missing.length===plan.objects.length) throw new Error('Nothing to assemble yet.');
-    cands.forEach(list=>list.forEach(c=>credit(c.url,c)));
-    // 4 + 5 variants
-    step(3,'run'); step(4,'run');
-    const nv=cfg.nvar; const variants=[];
-    for(let v=0;v<nv;v++){
-      const choice=cands.map(list=>list.length? list[v%list.length]:null);
-      const res=compose(plan,bg,choice,v); res.choice=choice; res.variant=v; res.quality=choice.reduce((s,c)=>s+(c?c.quality:0),0)/choice.length;
-      variants.push(res); await new Promise(r=>setTimeout(r,0));
-      if(v===0) showVariant(res);
-    }
-    step(3,'done',nv+' arrangements'); step(4,'done');
-    // 6 checks
-    step(5,'run'); const useV=hasW&&cfg.useVision;
-    for(const v of variants){ await scoreVariant(plan,checklist,v,useV); }
+    $('checks').innerHTML=checklist.map(c=>`<div class="check unk"><b>·</b><span>${c.q}</span></div>`).join(''); $('score').textContent='…';
+    // 2 layout
+    step(1,'run');
+    const scene={fov:60*Math.PI/180,horizon:plan.setting.kind==='space'?0.9:0.55,kind:plan.setting.kind};
+    const aspects=plan.objects.map(o=>aspectOf(o.name));
+    const L=solveLayout(plan,aspects,W,H,scene,()=>0.5);
+    const guide=drawGuide(plan,L,scene); $('guideView').getContext('2d').drawImage(guide,0,0);
+    const guideURL=guide.toDataURL('image/jpeg',0.9);
+    const pGuided=compilePrompt(plan,L,W,H,true), pText=compilePrompt(plan,L,W,H,false);
+    $('promptView').textContent=pText;
+    step(1,'done',L.inst.length+' objects placed');
+    // 3 render variations in parallel: guided ones keep the layout, a text-only one is a safety net
+    step(2,'run');
+    const jobs=[]; for(let i=0;i<cfg.nvar;i++){ const guided=cfg.useGuide && !(cfg.nvar>=3 && i===cfg.nvar-1); jobs.push({guided,seed:(Math.random()*2**31)|0,label:guided?'layout-guided':'text only'}); }
+    let done=0;
+    const res=await Promise.allSettled(jobs.map(j=>render(j.guided?pGuided:pText,j.seed,j.guided?guideURL:null).then(r=>{ done++; step(2,'run',done+'/'+jobs.length); const v={...j,...r}; if(!current||done===1) showVariant(v); return v; })));
+    const variants=res.filter(r=>r.status==='fulfilled').map(r=>r.value);
+    const fail=res.find(r=>r.status==='rejected');
+    if(!variants.length) throw new Error('Rendering failed: '+(fail&&fail.reason&&fail.reason.message));
+    if(fail) toast(res.filter(r=>r.status==='rejected').length+' variation(s) failed: '+fail.reason.message,'err');
+    step(2,'done',variants.length+' images · '+(variants.reduce((a,v)=>a+v.ms,0)/variants.length/1000).toFixed(1)+'s each');
+    // 4 check
+    step(3,'run');
+    await Promise.all(variants.map(v=>score(plan,checklist,v)));
     const vErr=variants.find(v=>v.visionErr);
-    if(vErr) toast('Vision check failed ('+vErr.visionErr.message+') — scoring by layout only.','err');
-    variants.sort((a,b)=>b.rank-a.rank); let best=variants[0];
-    step(5,'done', (useV&&!vErr?'vision + layout':'layout self-check')+' · best '+Math.round(best.score*100)+'%');
+    if(vErr) toast('Vision check failed: '+vErr.visionErr.message,'err');
+    variants.sort((a,b)=>b.score-a.score); let best=variants[0];
+    step(3, cfg.useVision&&!vErr?'done':'fail', cfg.useVision? 'best '+Math.round(best.score*100)+'% ('+best.label+')' : 'off');
     showVariant(best,variants);
-    // 7 repair: swap cutouts / enlarge objects that failed
-    step(6,'run');
-    const fails=best.checks.filter(c=>c.verdict!=null && c.verdict<0.75 && c.g!=null);
-    if(fails.length && best.score<0.999){
-      const choice=[...best.choice]; const boost={};
-      fails.forEach(f=>{ const list=cands[f.g]; if(f.kind==='presence'||f.kind==='count') boost[f.g]=1.3; if(list.length>1){ const idx=list.indexOf(choice[f.g]); choice[f.g]=list[(idx+1)%list.length]; } });
-      const r=compose(plan,bg,choice,best.variant,{scaleBoost:boost,seedBump:17}); r.choice=choice; r.variant=best.variant; r.quality=best.quality;
-      await scoreVariant(plan,checklist,r,useV);
-      if(r.rank>best.rank){ variants.unshift(r); best=r; step(6,'done','improved to '+Math.round(r.score*100)+'%'); } else step(6,'done','kept original (repair did not score higher)');
-      showVariant(best,variants);
-    } else step(6,'done','nothing to repair');
-    // 8 polish
-    if(hasW&&cfg.usePolish){
-      step(7,'run');
+    // 5 repair: targeted edits of the best image for whatever failed
+    step(4,'run');
+    let rounds=0;
+    while(cfg.useVision && !vErr && rounds<cfg.nrep){
+      const fails=best.checks.filter(c=>c.verdict===0);
+      if(!fails.length) break;
+      rounds++; step(4,'run','round '+rounds+': fixing '+fails.length+' item'+(fails.length>1?'s':''));
+      const instr=repairInstruction(plan,fails);
       try{
-        const pol=await polishVariant(plan,prompt,best);
-        const test={...best, canvas:pol}; await scoreVariant(plan,checklist,test,useV);
-        if(test.score+0.001>=best.score || !useV){ best.final=pol; best.checks=test.checks; best.score=test.score; step(7,'done','applied (prompt match kept)'); }
-        else step(7,'done','reverted — polish broke a checklist item');
-        showVariant(best,variants);
-      }catch(e){ step(7,'fail',e.message); toast('Polish pass skipped: '+e.message,'err'); }
-    } else step(7,'done', hasW?'off':'needs the Worker');
-    // learn: remember the winning cutouts
-    best.choice.forEach((c,g)=>{ if(c) libWin(plan.objects[g].search||plan.objects[g].name,c); });
-    showCredits();
+        const r=await render(instr+' Scene: '+pText,(Math.random()*2**31)|0,null,toJPEG(best.bmp,GW,GH,0.9));
+        const v={...r,label:'repair '+rounds,guided:false}; await score(plan,checklist,v);
+        if(v.score>best.score){ variants.unshift(v); best=v; showVariant(best,variants); }
+        else { variants.push(v); }
+      }catch(e){ toast('Repair render failed: '+e.message,'err'); break; }
+    }
+    step(4,'done', rounds? (best.label.startsWith('repair')?'improved to '+Math.round(best.score*100)+'%':'no improvement — kept the best original') : 'nothing to repair');
+    showVariant(best,variants);
     toast('Done in '+((performance.now()-t0)/1000).toFixed(1)+'s — prompt match '+Math.round(best.score*100)+'%','ok');
   }catch(e){
     toast(e.message||String(e),'err',8000); console.error(e);
@@ -906,18 +594,18 @@ async function run(){
 // ---------- wiring ----------
 const EX=['two red umbrellas left of a yellow bicycle in fog','a glass whale floating in a cathedral','a golden fox in a snowy forest at sunset','a black cat on a wooden table in a library','three hot air balloons over a lake at sunrise','a marble horse next to a lighthouse at night'];
 $('examples').innerHTML=EX.map(e=>`<button class="chip">${e}</button>`).join('');
-$('examples').onclick=e=>{ if(e.target.classList.contains('chip')){ $('prompt').value=e.target.textContent; } };
+$('examples').onclick=e=>{ if(e.target.classList.contains('chip')) $('prompt').value=e.target.textContent; };
 $('go').onclick=run;
 $('prompt').addEventListener('keydown',e=>{ if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)) run(); });
-$('dl').onclick=()=>{ if(!current) return; const c=current.final||current.canvas; c.toBlob(b=>{ const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download='assemblage-'+Date.now()+'.jpg'; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),4000); toast('Saved.','ok'); },'image/jpeg',0.92); };
-function syncCfg(){ $('wurl').value=cfg.worker; $('nvar').value=cfg.nvar; $('nvarV').textContent=cfg.nvar; $('pstr').value=Math.round(cfg.pstr*100); $('pstrV').textContent=cfg.pstr.toFixed(2); $('useVision').checked=cfg.useVision; $('usePolish').checked=cfg.usePolish; $('hdBg').checked=cfg.hdBg; }
-function saveCfg(){ cfg.worker=$('wurl').value.trim(); cfg.nvar=+$('nvar').value; cfg.pstr=+$('pstr').value/100; cfg.useVision=$('useVision').checked; cfg.usePolish=$('usePolish').checked; cfg.hdBg=$('hdBg').checked; LS.set('assemblage.cfg',cfg); $('nvarV').textContent=cfg.nvar; $('pstrV').textContent=cfg.pstr.toFixed(2); }
-['wurl','nvar','pstr','useVision','usePolish','hdBg'].forEach(id=>$(id).addEventListener('input',saveCfg));
+$('dl').onclick=()=>{ if(!current) return; const a=document.createElement('a'); a.href=URL.createObjectURL(current.blob); a.download='assemblage-'+Date.now()+'.jpg'; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),4000); toast('Saved.','ok'); };
+function syncCfg(){ $('wurl').value=cfg.worker; $('nvar').value=cfg.nvar; $('nvarV').textContent=cfg.nvar; $('nrep').value=cfg.nrep; $('nrepV').textContent=cfg.nrep; $('useGuide').checked=cfg.useGuide; $('useVision').checked=cfg.useVision; }
+function saveCfg(){ cfg.worker=$('wurl').value.trim(); cfg.nvar=+$('nvar').value; cfg.nrep=+$('nrep').value; cfg.useGuide=$('useGuide').checked; cfg.useVision=$('useVision').checked; LS.set('assemblage.cfg',cfg); $('nvarV').textContent=cfg.nvar; $('nrepV').textContent=cfg.nrep; }
+['wurl','nvar','nrep','useGuide','useVision'].forEach(id=>$(id).addEventListener('input',saveCfg));
 $('gearBtn').onclick=()=>{ syncCfg(); $('settings').showModal(); };
-$('settings').addEventListener('close',()=>{ saveCfg(); toast(workerURL()?'Settings saved — Worker on.':'Settings saved — running without the Worker.'); });
+$('settings').addEventListener('close',()=>{ saveCfg(); toast(workerURL()?'Settings saved.':'Settings saved — add the Worker URL to render.'); });
 $('testW').onclick=async()=>{ saveCfg(); if(!workerURL()){ toast('Enter the Worker URL first.','err'); return; } try{ const r=await fetch(workerURL()+'/status'); const j=await r.json(); toast(j.ai? 'Worker OK'+(j.used!=null?` — ${j.used}/${j.cap} AI calls used today`:' (no daily cap: KV not bound)') : 'Worker reached, but the AI binding is missing.', j.ai?'ok':'err',6000); }catch(e){ toast('Could not reach the Worker: '+e.message,'err'); } };
-$('clearLib').onclick=()=>{ LS.set('assemblage.lib',{}); toast('Learned library cleared.','ok'); };
 resetSteps();
 </script>
+
 </body>
 </html>

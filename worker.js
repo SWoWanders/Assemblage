@@ -1,11 +1,9 @@
 // Assemblage — companion Cloudflare Worker
 // Endpoints:
-//   POST /plan    {prompt}                        -> {plan}          (Workers AI text model)
-//   POST /vision  {image: dataURL, questions: []}  -> {answers: [bool]} (Workers AI vision model)
-//   POST /polish  {image: dataURL, prompt}          -> image          (Workers AI FLUX.2 klein edit)
-//   POST /pick    {image: contact sheet, term, n}  -> {good: [cell numbers]} (which photos really show the thing)
-//   GET  /fetch?url=...                            -> proxied image/JSON with CORS (allowlisted hosts only)
-//   GET  /status                                   -> {ok, used, cap}
+//   POST /plan    {prompt}                             -> {plan}             (Workers AI text model)
+//   POST /render  {prompt, guide?, image?, seed, w, h} -> image/jpeg         (FLUX.2 klein: text, layout-guided, or edit)
+//   POST /vision  {image: dataURL, questions: []}       -> {answers: [bool]}  (Workers AI vision model)
+//   GET  /status                                        -> {ok, used, cap}
 //
 // Bindings (wrangler.toml / dashboard):
 //   AI      — Workers AI binding (required)
@@ -22,21 +20,15 @@ const MODELS = {
     '@cf/zai-org/glm-4.7-flash',
     '@cf/meta/llama-3.1-8b-instruct-fast',
   ],
+  // Strictest first: the checker must not pass a chart as a bicycle.
   vision: [
-    '@cf/meta/llama-4-scout-17b-16e-instruct',
     '@cf/google/gemma-4-26b-a4b-it',
+    '@cf/meta/llama-4-scout-17b-16e-instruct',
     '@cf/meta/llama-3.2-11b-vision-instruct',
   ],
-  // FLUX.2 [klein] edits an input image (multipart, input_image_0 must be < 512x512)
-  polish: ['@cf/black-forest-labs/flux-2-klein-4b', '@cf/black-forest-labs/flux-2-klein-9b'],
+  // FLUX.2 [klein]: fast distilled generator; multipart input, input images must be < 512x512
+  render: ['@cf/black-forest-labs/flux-2-klein-4b', '@cf/black-forest-labs/flux-2-klein-9b'],
 };
-
-const FETCH_ALLOW = [
-  'commons.wikimedia.org', 'upload.wikimedia.org',
-  'api.openverse.org', 'api.openverse.engineering',
-  'api.polyhaven.com', 'cdn.polyhaven.com', 'dl.polyhaven.org',
-  'staticflickr.com', 'live.staticflickr.com',
-];
 
 const PLAN_SYSTEM = `You turn an image prompt into a JSON scene plan for a photo-collage engine.
 The engine can only paste REAL photographs of real things, then recolour them, change their material, and arrange them.
@@ -65,7 +57,6 @@ export default {
     const json = (obj, status = 200) => new Response(JSON.stringify(obj), { status, headers: { ...cors, 'Content-Type': 'application/json' } });
 
     try {
-      if (url.pathname === '/fetch') return await proxyFetch(url, cors, ctx);
       if (url.pathname === '/status') {
         const used = await getUsed(env);
         return json({ ok: true, used, cap: cap(env), ai: !!env.AI });
@@ -79,9 +70,8 @@ export default {
       const body = await request.json();
       if (url.pathname === '/plan') return json(await plan(env, String(body.prompt || '').slice(0, 600)));
       if (url.pathname === '/vision') return json(await vision(env, body.image, (body.questions || []).slice(0, 16)));
-      if (url.pathname === '/pick') return json(await pick(env, body.image, String(body.term || '').slice(0, 60), Math.min(16, parseInt(body.n, 10) || 12)));
-      if (url.pathname === '/polish') {
-        const out = await polish(env, body.image, String(body.prompt || '').slice(0, 400));
+      if (url.pathname === '/render') {
+        const out = await render(env, body);
         return new Response(out.bytes, { headers: { ...cors, 'Content-Type': out.type, 'X-Model': out.model } });
       }
       return json({ error: 'Unknown endpoint' }, 404);
@@ -100,30 +90,6 @@ async function takeQuota(env) {
   if (used >= cap(env)) return false;
   await env.LIMITS.put(dayKey(), String(used + 1), { expirationTtl: 60 * 60 * 48 });
   return true;
-}
-
-async function proxyFetch(url, cors, ctx) {
-  const target = url.searchParams.get('url');
-  let t;
-  try { t = new URL(target); } catch { return new Response('bad url', { status: 400, headers: cors }); }
-  if (t.protocol !== 'https:' || !FETCH_ALLOW.some(h => t.hostname === h || t.hostname.endsWith('.' + h))) {
-    return new Response('host not allowed: ' + t.hostname, { status: 403, headers: cors });
-  }
-  const cache = caches.default;
-  const key = new Request('https://assemblage-cache/' + encodeURIComponent(t.href));
-  let res = await cache.match(key);
-  if (!res) {
-    const up = await fetch(t.href, {
-      headers: { 'User-Agent': 'Assemblage/1.0 (https://swowanders.github.io; photo-collage image maker)' },
-      cf: { cacheTtl: 86400, cacheEverything: true },
-    });
-    if (!up.ok) return new Response('upstream ' + up.status, { status: up.status, headers: cors });
-    res = new Response(up.body, { headers: { 'Content-Type': up.headers.get('Content-Type') || 'application/octet-stream', 'Cache-Control': 'public, max-age=86400' } });
-    ctx.waitUntil(cache.put(key, res.clone()));
-  }
-  const out = new Response(res.body, res);
-  for (const [k, v] of Object.entries(cors)) out.headers.set(k, v);
-  return out;
 }
 
 function textOf(r) {
@@ -195,20 +161,6 @@ async function visionAsk(env, image, text, maxTokens) {
   throw new Error('All vision models failed: ' + (lastErr && lastErr.message));
 }
 
-async function pick(env, image, term, n) {
-  if (!image || !term) throw new Error('image and term required');
-  const text = `This contact sheet has ${n} numbered cells; each number is in the cell's top-left corner.
-Which cells clearly show a real photograph of "${term}" as the main subject, with the whole object visible?
-Reject cells showing a different object, people or animals (unless that is what "${term}" is), logos, badges, text, drawings, icons, clip-art, or only a tiny part of the object.
-Reply ONLY as JSON: {"good":[cell numbers, best first]}. Use [] if none qualify.`;
-  const r = await visionAsk(env, image, text, 120);
-  let good = [];
-  try { const j = extractJSON(r.text); if (Array.isArray(j.good)) good = j.good; }
-  catch { good = (r.text.match(/\d+/g) || []); }
-  good = [...new Set(good.map(x => parseInt(x, 10)).filter(x => x >= 1 && x <= n))];
-  return { good, model: r.model };
-}
-
 function b64ToBytes(b64) {
   const bin = atob(b64);
   const out = new Uint8Array(bin.length);
@@ -216,23 +168,29 @@ function b64ToBytes(b64) {
   return out;
 }
 
-async function polish(env, image, prompt) {
-  const bytes = dataURLtoBytes(image);
-  const instruction = 'Make this photo collage look like one single real photograph. Keep the exact same composition, camera angle, objects, object positions, sizes, colours and background. Only fix lighting, shadows, reflections, edges and colour grading so everything sits naturally in the scene. Scene: ' + prompt;
+async function render(env, body) {
+  const prompt = String(body.prompt || '').slice(0, 1800);
+  if (!prompt) throw new Error('prompt required');
+  const w = Math.min(1280, Math.max(256, (parseInt(body.w, 10) || 1024) & ~15));
+  const h = Math.min(1280, Math.max(256, (parseInt(body.h, 10) || 688) & ~15));
+  const img = body.image || body.guide; // edit source or layout guide (< 512x512 JPEG data URL)
   let lastErr;
-  for (const model of MODELS.polish) {
-    try {
-      const form = new FormData();
-      form.append('prompt', instruction);
-      form.append('input_image_0', new Blob([bytes], { type: 'image/jpeg' }), 'collage.jpg');
-      form.append('width', '1024');
-      form.append('height', '688');
-      const fr = new Response(form);
-      const r = await env.AI.run(model, { multipart: { body: fr.body, contentType: fr.headers.get('content-type') } });
-      const b64 = r && (r.image || (r.result && r.result.image));
-      if (!b64) throw new Error('no image in reply');
-      return { bytes: b64ToBytes(String(b64).replace(/^data:[^,]+,/, '')), type: 'image/jpeg', model };
-    } catch (e) { lastErr = e; }
+  for (const model of MODELS.render) {
+    for (const withSeed of [true, false]) {
+      try {
+        const form = new FormData();
+        form.append('prompt', prompt);
+        form.append('width', String(w));
+        form.append('height', String(h));
+        if (withSeed && body.seed != null) form.append('seed', String(parseInt(body.seed, 10) >>> 0));
+        if (img) form.append('input_image_0', new Blob([dataURLtoBytes(img)], { type: 'image/jpeg' }), 'input.jpg');
+        const fr = new Response(form);
+        const r = await env.AI.run(model, { multipart: { body: fr.body, contentType: fr.headers.get('content-type') } });
+        const b64 = r && (r.image || (r.result && r.result.image));
+        if (!b64) throw new Error('no image in reply');
+        return { bytes: b64ToBytes(String(b64).replace(/^data:[^,]+,/, '')), type: 'image/jpeg', model };
+      } catch (e) { lastErr = e; if (!/seed/i.test(String(e.message))) break; }
+    }
   }
-  throw new Error('Polish models failed: ' + (lastErr && lastErr.message));
+  throw new Error('Render failed: ' + (lastErr && lastErr.message));
 }
