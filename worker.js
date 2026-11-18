@@ -29,11 +29,11 @@ const MODELS = {
   // Image models the app can choose from. multipart = Cloudflare-hosted FLUX.2 (input images < 512x512).
   render: {
     'klein-4b': { id: '@cf/black-forest-labs/flux-2-klein-4b', kind: 'multipart' },
+    'schnell':  { id: '@cf/black-forest-labs/flux-1-schnell',  kind: 'schnell' },
     'klein-9b': { id: '@cf/black-forest-labs/flux-2-klein-9b', kind: 'multipart' },
     'dev':      { id: '@cf/black-forest-labs/flux-2-dev',      kind: 'multipart' },
-    // Third-party model: pricing is set in the Cloudflare dashboard. On the free Workers plan a request
-    // that isn't covered fails instead of billing. Most permissive moderation setting, as requested.
-    'max':      { id: 'black-forest-labs/flux-2-max',          kind: 'json', safety_tolerance: 5 },
+    // Only Cloudflare-hosted models: they draw from the free daily Neuron allowance.
+    // "Third-party" models (e.g. FLUX.2 [max]) are billed in dollars and are deliberately not listed.
   },
 };
 
@@ -226,6 +226,11 @@ async function render(env, body) {
         if (img) form.append('input_image_0', new Blob([dataURLtoBytes(img)], { type: 'image/jpeg' }), 'input.jpg');
         const fr = new Response(form);
         r = await env.AI.run(m.id, { multipart: { body: fr.body, contentType: fr.headers.get('content-type') } });
+      } else if (m.kind === 'schnell') {
+        // FLUX.1 [schnell]: text only, fixed square output, 4 steps (cheapest)
+        const input = { prompt: prompt.slice(0, 2000), steps: 4 };
+        if (withSeed && seed != null) input.seed = seed;
+        r = await env.AI.run(m.id, input);
       } else {
         const input = { prompt, width: w, height: h, output_format: 'jpeg', safety_tolerance: m.safety_tolerance };
         if (withSeed && seed != null) input.seed = seed;
