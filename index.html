@@ -92,7 +92,7 @@ dialog input[type=text],dialog input[type=url]{width:100%;padding:10px;backgroun
   <div class="card">
     <details><summary>Scene plan, layout guide &amp; prompt</summary><canvas id="guideView" width="504" height="336" style="width:100%;border-radius:8px;margin-top:8px"></canvas><pre id="promptView">–</pre><pre id="planView">–</pre></details>
   </div>
-  <div class="card credits" id="credits">Rendered with the model chosen in ⚙︎ (Cloudflare Workers AI, Pollinations or AI Horde) and checked with a vision model, both on Cloudflare Workers AI through your Worker.</div>
+  <div class="card credits" id="credits">Rendered and checked with the services chosen in the Image model menu: Cloudflare Workers AI (through your Worker) for FLUX.2/FLUX.1, or Pollinations and AI Horde, which use no Cloudflare.</div>
 </main>
 <div id="toasts"></div>
 
@@ -562,18 +562,39 @@ function polTurn(){ // one shared queue for every Pollinations call (anonymous t
   const turn = polGate.then(async()=>{ const wait=Math.max(0,pollNext-Date.now()); if(wait>0){ noteRunning('Pollinations free tier — next turn in '+Math.ceil(wait/1000)+'s'); await sleep(wait); } pollNext=Date.now()+gap; });
   polGate = turn.catch(()=>{}); return turn;
 }
-async function polChat(messages, maxTokens=600){
+async function polChat(messages, maxTokens=600, model='openai'){
   for(let attempt=0; attempt<3; attempt++){
     await polTurn();
     let r;
-    if(cfg.polToken) r=await fetch('https://gen.pollinations.ai/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+cfg.polToken},body:JSON.stringify({model:'openai',messages,max_tokens:maxTokens,temperature:0})});
-    else r=await fetch('https://text.pollinations.ai/openai',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'openai',messages,private:true,referrer:'swowanders.github.io'})});
+    if(cfg.polToken) r=await fetch('https://gen.pollinations.ai/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+cfg.polToken},body:JSON.stringify({model,messages,max_tokens:maxTokens,temperature:0})});
+    else r=await fetch('https://text.pollinations.ai/openai',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model,messages,private:true,referrer:'swowanders.github.io'})});
     if(r.status===429){ await sleep(15000); continue; }
     const txt=await r.text();
-    if(!r.ok) throw new Error('Pollinations text HTTP '+r.status+': '+txt.slice(0,120));
+    if(!r.ok){ const e=new Error('Pollinations text HTTP '+r.status+': '+txt.slice(0,160)); e.status=r.status; throw e; }
     try{ const j=JSON.parse(txt); const c=j.choices&&j.choices[0]; if(c) return c.message?.content||c.text||''; return typeof j==='string'?j:txt; }catch{ return txt; }
   }
   throw new Error('Pollinations text is rate-limiting — add a free token in ⚙︎ or try again shortly');
+}
+// Find Pollinations models that accept images. The list changes, so read it live and remember what worked.
+let polVisionList=null, polVisionP=null;
+function polVisionModels(){ return polVisionP || (polVisionP=loadPolVision().catch(e=>{ polVisionP=null; throw e; })); }
+async function loadPolVision(){
+  const remembered=LS.get('assemblage.polVision',null);
+  if(polVisionList) return polVisionList;
+  let names=[];
+  try{
+    const url = cfg.polToken ? 'https://gen.pollinations.ai/v1/models' : 'https://text.pollinations.ai/models';
+    const r=await fetch(url, cfg.polToken?{headers:{'Authorization':'Bearer '+cfg.polToken}}:{});
+    const j=await r.json(); const arr=Array.isArray(j)?j:(j.data||j.models||Object.values(j));
+    const vis=arr.filter(m=>m && (m.vision===true || (Array.isArray(m.input_modalities)&&m.input_modalities.includes('image')) || (m.modalities&&JSON.stringify(m.modalities).includes('image'))));
+    // anonymous-tier models first when there's no token
+    vis.sort((a,b)=> (cfg.polToken?0:((b.tier==='anonymous')-(a.tier==='anonymous'))));
+    names=vis.map(m=>m.name||m.id).filter(Boolean);
+  }catch(e){ /* list unavailable: fall back to common names */ }
+  if(!names.length) names=['openai-fast','gemini','openai-large','mistral','claude'];
+  if(remembered && names.includes(remembered)) names=[remembered,...names.filter(n=>n!==remembered)];
+  polVisionList=names.slice(0,6);
+  return polVisionList;
 }
 function jsonIn(s){ s=String(s).replace(/<think>[\s\S]*?<\/think>/gi,''); const a=s.indexOf('{'), b=s.lastIndexOf('}'); if(a<0||b<=a) throw new Error('no JSON in reply'); return JSON.parse(s.slice(a,b+1)); }
 function answersIn(s,n){ try{ const j=jsonIn(s); if(Array.isArray(j.answers)) return j.answers.slice(0,n).map(v=>v===true||/^y/i.test(String(v))); }catch{} return (String(s).toLowerCase().match(/\b(yes|no)\b/g)||[]).slice(0,n).map(t=>t==='yes'); }
@@ -586,10 +607,17 @@ async function brainVision(image, questions){
   if(usesCloudflare()) return await workerPost('/vision',{image,questions});
   const q=questions.map((x,i)=>`${i+1}. ${x}`).join('\n');
   const text=`Look carefully at this photo and answer each question with yes or no. Be strict: answer yes only if it is clearly true.\n${q}\nReply ONLY with JSON, no explanation: {"answers":["yes","no",...]} with exactly ${questions.length} entries.`;
-  const out=await polChat([{role:'user',content:[{type:'text',text},{type:'image_url',image_url:{url:image}}]}],300);
-  const answers=answersIn(out,questions.length);
-  if(answers.length!==questions.length) throw new Error('Pollinations vision gave '+answers.length+'/'+questions.length+' answers');
-  return {answers, model:'Pollinations vision (free)'};
+  const tried=[];
+  for(const m of await polVisionModels()){
+    try{
+      const out=await polChat([{role:'user',content:[{type:'text',text},{type:'image_url',image_url:{url:image}}]}],300,m);
+      const answers=answersIn(out,questions.length);
+      if(answers.length!==questions.length){ tried.push(m+': '+answers.length+'/'+questions.length+' answers'); continue; }
+      LS.set('assemblage.polVision',m); polVisionList=[m,...polVisionList.filter(n=>n!==m)];
+      return {answers, model:'Pollinations '+m+' (free)'};
+    }catch(e){ tried.push(m+': '+String(e.message).replace(/^Pollinations text /,'').slice(0,70)); if(e.status!==400&&e.status!==404&&e.status!==401&&e.status!==402&&e.status!==403) break; }
+  }
+  throw new Error('no free Pollinations vision model accepted the image'+(cfg.polToken?'':' — a free token (⚙︎) unlocks more models')+'. Tried: '+tried.join(' | '));
 }
 async function render(prompt, seed, guideURL, editURL){
   const t0=performance.now(); let blob;
