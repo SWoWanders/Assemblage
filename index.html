@@ -67,7 +67,7 @@ dialog input[type=text],dialog input[type=url]{width:100%;padding:10px;backgroun
       <option value="pollinations">Pollinations (FLUX) — free, no daily limit · ~1 image/15s · uses no neurons</option>
       <option value="horde">AI Horde (Stable Diffusion) — free forever · slow queue · uses no neurons</option>
     </select>
-    <div class="hint" style="margin-top:4px">FLUX.2 / FLUX.1 use your free Cloudflare neurons · Pollinations &amp; AI Horde are outside free services (repairs use klein 4B)</div>
+    <div class="hint" style="margin-top:4px">FLUX.2 / FLUX.1 use your Cloudflare neurons · Pollinations &amp; AI Horde run fully free with no Cloudflare: planning, checks and re-rolls go through Pollinations too</div>
     <div class="chips" id="examples"></div>
     <div class="row" style="margin-top:8px">
       <button class="main" id="go">Assemble</button>
@@ -476,6 +476,7 @@ const clamp=(v,a,b)=>v<a?a:v>b?b:v;
 function toast(msg,kind='',ms=4200){ const t=document.createElement('div'); t.className='toast '+kind; t.textContent=msg; $('toasts').appendChild(t); setTimeout(()=>t.remove(),ms); }
 const STEPS=['Plan the scene','Lay out with real geometry','Render variations','Check against the prompt','Repair what failed'];
 function resetSteps(){ $('steps').innerHTML=STEPS.map((s,i)=>`<li id="st${i}">${s}</li>`).join(''); }
+function noteRunning(msg){ const li=document.querySelector('#steps li.run'); if(li) li.textContent=li.textContent.split(' — ')[0]+' — '+msg; }
 function step(i,state,note){ const li=$('st'+i); if(!li) return; li.className=state; li.textContent=STEPS[i]+(note?' — '+note:''); }
 
 async function workerPost(path, body, as='json'){
@@ -513,13 +514,11 @@ const EXTERNAL={pollinations:1, horde:1};
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 let pollNext=0; // Pollinations anonymous tier: about one request every 15 s
 async function renderPollinations(prompt, seed){
-  const gap = cfg.polToken ? 3000 : 16000;
-  const wait = Math.max(0, pollNext - Date.now()); pollNext = Math.max(Date.now(), pollNext) + gap;
-  if(wait>0){ step(2,'run','Pollinations rate limit — waiting '+Math.ceil(wait/1000)+'s'); await sleep(wait); }
   const q=new URLSearchParams({width:String(W),height:String(H),seed:String(seed>>>0),model:'flux',nologo:'true',safe:'false',private:'true',referrer:'swowanders.github.io'});
   if(cfg.polToken) q.set('token',cfg.polToken);
   const url='https://image.pollinations.ai/prompt/'+encodeURIComponent(prompt.slice(0,1500))+'?'+q;
   for(let attempt=0; attempt<3; attempt++){
+    await polTurn();
     const r=await fetch(url);
     if(r.status===429){ step(2,'run','Pollinations busy — retrying in 20s'); await sleep(20000); continue; }
     if(!r.ok) throw new Error('Pollinations HTTP '+r.status);
@@ -553,9 +552,48 @@ async function renderHorde(prompt, seed){
   if(/^https?:/.test(g.img)){ const r=await fetch(g.img); if(!r.ok) throw new Error('AI Horde image download '+r.status); return await r.blob(); }
   return await (await fetch('data:image/webp;base64,'+g.img)).blob();
 }
+
+// ---- "Brain" (planning + vision checks): Cloudflare Worker for Cloudflare models, Pollinations otherwise ----
+const PLAN_SYSTEM = "You turn an image prompt into a JSON scene plan for a photo-collage engine.\nThe engine can only paste REAL photographs of real things, then recolour them, change their material, and arrange them.\nSo for imaginary things, break them into a real searchable object plus a material/colour.\nExamples: \"glass whale\" -> name \"whale\", search \"whale\", material \"glass\". \"robot cat\" -> search \"cat\", material \"metal\".\nReturn ONLY JSON, no prose, in exactly this shape:\n{\"setting\":{\"query\":\"short photo search phrase for the background place, or empty\",\"kind\":\"outdoor|indoor|space|underwater\",\"time\":\"day|sunrise|sunset|night|overcast\",\"weather\":\"clear|fog|rain|snow|haze\",\"tags\":[\"2-5 single words describing the place for an HDRI library, e.g. forest, urban, beach, indoor, skies\"]},\n \"objects\":[{\"name\":\"umbrella\",\"search\":\"umbrella\",\"count\":2,\"color\":\"red or null\",\"material\":\"glass|gold|silver|metal|wood|stone|marble|ice|neon|paper|bronze|null\",\"state\":\"ground|flying|sky\",\"size_m\":1.0}],\n \"relations\":[{\"a\":0,\"b\":1,\"type\":\"left_of|right_of|behind|in_front_of|on|under|above|next_to\"}],\n \"main\":0}\nRules: max 6 objects. \"search\" must be one or two plain English nouns a stock photo site would have. size_m is the real-world height in metres of ONE such object at the size the prompt implies (a giant cat is still searched as \"cat\" but size_m 6). state \"sky\" is for sun, moon, planets, clouds; \"flying\" for anything airborne or floating. Relations use object indexes. Use null, never invent colours the prompt did not ask for.";
+const usesCloudflare = ()=> !EXTERNAL[cfg.model];
+let polGate=Promise.resolve();
+function polTurn(){ // one shared queue for every Pollinations call (anonymous tier ≈ 1 request / 15 s)
+  const gap = cfg.polToken ? 3000 : 16000;
+  const turn = polGate.then(async()=>{ const wait=Math.max(0,pollNext-Date.now()); if(wait>0){ noteRunning('Pollinations free tier — next turn in '+Math.ceil(wait/1000)+'s'); await sleep(wait); } pollNext=Date.now()+gap; });
+  polGate = turn.catch(()=>{}); return turn;
+}
+async function polChat(messages, maxTokens=600){
+  for(let attempt=0; attempt<3; attempt++){
+    await polTurn();
+    let r;
+    if(cfg.polToken) r=await fetch('https://gen.pollinations.ai/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+cfg.polToken},body:JSON.stringify({model:'openai',messages,max_tokens:maxTokens,temperature:0})});
+    else r=await fetch('https://text.pollinations.ai/openai',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'openai',messages,private:true,referrer:'swowanders.github.io'})});
+    if(r.status===429){ await sleep(15000); continue; }
+    const txt=await r.text();
+    if(!r.ok) throw new Error('Pollinations text HTTP '+r.status+': '+txt.slice(0,120));
+    try{ const j=JSON.parse(txt); const c=j.choices&&j.choices[0]; if(c) return c.message?.content||c.text||''; return typeof j==='string'?j:txt; }catch{ return txt; }
+  }
+  throw new Error('Pollinations text is rate-limiting — add a free token in ⚙︎ or try again shortly');
+}
+function jsonIn(s){ s=String(s).replace(/<think>[\s\S]*?<\/think>/gi,''); const a=s.indexOf('{'), b=s.lastIndexOf('}'); if(a<0||b<=a) throw new Error('no JSON in reply'); return JSON.parse(s.slice(a,b+1)); }
+function answersIn(s,n){ try{ const j=jsonIn(s); if(Array.isArray(j.answers)) return j.answers.slice(0,n).map(v=>v===true||/^y/i.test(String(v))); }catch{} return (String(s).toLowerCase().match(/\b(yes|no)\b/g)||[]).slice(0,n).map(t=>t==='yes'); }
+async function brainPlan(prompt){
+  if(usesCloudflare()){ const r=await workerPost('/plan',{prompt}); return {plan:r.plan, model:String(r.model||'').split('/').pop()}; }
+  const out=await polChat([{role:'system',content:PLAN_SYSTEM},{role:'user',content:prompt}],900);
+  return {plan:jsonIn(out), model:'Pollinations (free)'};
+}
+async function brainVision(image, questions){
+  if(usesCloudflare()) return await workerPost('/vision',{image,questions});
+  const q=questions.map((x,i)=>`${i+1}. ${x}`).join('\n');
+  const text=`Look carefully at this photo and answer each question with yes or no. Be strict: answer yes only if it is clearly true.\n${q}\nReply ONLY with JSON, no explanation: {"answers":["yes","no",...]} with exactly ${questions.length} entries.`;
+  const out=await polChat([{role:'user',content:[{type:'text',text},{type:'image_url',image_url:{url:image}}]}],300);
+  const answers=answersIn(out,questions.length);
+  if(answers.length!==questions.length) throw new Error('Pollinations vision gave '+answers.length+'/'+questions.length+' answers');
+  return {answers, model:'Pollinations vision (free)'};
+}
 async function render(prompt, seed, guideURL, editURL){
   const t0=performance.now(); let blob;
-  if(EXTERNAL[cfg.model] && !editURL){
+  if(EXTERNAL[cfg.model]){
     blob = cfg.model==='pollinations' ? await renderPollinations(prompt,seed) : await renderHorde(prompt,seed);
   } else {
     // edits (repairs) need an image-editing model; outside services and schnell can't, so klein 4B does them
@@ -569,7 +607,7 @@ async function score(plan, checklist, v){
   v.checks=checklist.map(c=>({...c,verdict:null}));
   if(!cfg.useVision){ v.score=0.5; return v; }
   try{
-    const r=await workerPost('/vision',{image:toJPEG(v.bmp,512,344,0.85),questions:checklist.map(c=>c.q)});
+    const r=await brainVision(toJPEG(v.bmp,512,344,0.85),checklist.map(c=>c.q));
     (r.answers||[]).forEach((a,i)=>{ if(v.checks[i]) v.checks[i].verdict=a?1:0; });
     v.visionModel=r.model;
     if(!(r.answers||[]).length) throw new Error('the vision model returned no answers');
@@ -599,13 +637,13 @@ let busy=false;
 async function run(){
   if(busy) return; const prompt=$('prompt').value.trim();
   if(!prompt){ toast('Type a description first.','err'); return; }
-  if(!workerURL()){ toast('Add your Worker URL in settings first — rendering runs there.','err',6000); $('gearBtn').click(); return; }
+  if(!workerURL() && usesCloudflare()){ toast('This model runs on your Cloudflare Worker — add its URL in ⚙︎, or pick Pollinations or AI Horde to run with no Cloudflare at all.','err',8000); return; }
   busy=true; $('go').disabled=true; $('go').textContent='Working…'; resetSteps();
   const t0=performance.now();
   try{
     // 1 plan
     step(0,'run'); let plan;
-    try{ const r=await workerPost('/plan',{prompt}); plan=normalizePlan(r.plan,prompt); step(0,'done',String(r.model||'').split('/').pop()); }
+    try{ const r=await brainPlan(prompt); plan=normalizePlan(r.plan,prompt); step(0,'done',r.model); }
     catch(e){ if(e.status===429) throw new Error(e.message); plan=parsePrompt(prompt); step(0,'done','built-in parser'); toast('AI planner failed ('+e.message+') — using the built-in parser.','err'); }
     if(!plan.objects.length) throw new Error('I could not find any objects in that description. Try naming a thing, e.g. "a fox in a snowy forest".');
     $('planView').textContent=JSON.stringify(plan,null,1);
@@ -650,13 +688,15 @@ async function run(){
       rounds++; step(4,'run','round '+rounds+': fixing '+fails.length+' item'+(fails.length>1?'s':''));
       const instr=repairInstruction(plan,fails);
       try{
-        const r=await render(instr+' Scene: '+pText,(Math.random()*2**31)|0,null,toJPEG(best.bmp,GW,GH,0.9));
-        const v={...r,label:'repair '+rounds,guided:false}; await score(plan,checklist,v);
+        const r= usesCloudflare()
+          ? await render(instr+' Scene: '+pText,(Math.random()*2**31)|0,null,toJPEG(best.bmp,GW,GH,0.9))
+          : await render(pText+' Most important: '+instr.replace(/^Edit this photo\. /,'').replace(/ Keep everything else[\s\S]*$/,''),(Math.random()*2**31)|0,null,null);
+        const v={...r,label:(usesCloudflare()?'repair ':'re-roll ')+rounds,guided:false}; await score(plan,checklist,v);
         if(v.score>best.score){ variants.unshift(v); best=v; showVariant(best,variants); }
         else { variants.push(v); }
       }catch(e){ toast(e.status===429? 'Repairs stopped: '+e.message : 'Repair render failed: '+e.message,'err',8000); break; }
     }
-    step(4,'done', rounds? (best.label.startsWith('repair')?'improved to '+Math.round(best.score*100)+'%':'no improvement — kept the best original') : 'nothing to repair');
+    step(4,'done', rounds? (/^(repair|re-roll)/.test(best.label)?'improved to '+Math.round(best.score*100)+'%':'no improvement — kept the best original') : 'nothing to repair');
     showVariant(best,variants);
     toast('Done in '+((performance.now()-t0)/1000).toFixed(1)+'s'+(vErr||!cfg.useVision?'':' — prompt match '+Math.round(best.score*100)+'%'),'ok');
   }catch(e){
