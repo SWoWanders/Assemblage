@@ -58,6 +58,16 @@ dialog input[type=text],dialog input[type=url]{width:100%;padding:10px;backgroun
 <main>
   <div class="card">
     <textarea id="prompt" placeholder="Describe a picture… e.g. two red umbrellas left of a yellow bicycle in fog"></textarea>
+    <label for="model" style="display:block;margin:8px 0 4px;font-size:14px;color:var(--dim)">Image model</label>
+    <select id="model" style="width:100%;min-height:44px;padding:10px;background:#0f0d0b;color:var(--ink);border:1px solid var(--line);border-radius:8px;font-size:15px">
+      <option value="klein-4b">FLUX.2 [klein] 4B — best value · ~100 neurons/image (default)</option>
+      <option value="schnell">FLUX.1 [schnell] — cheapest · ~60 neurons/image · square, no edits</option>
+      <option value="klein-9b">FLUX.2 [klein] 9B — sharper · ~1,400 neurons/image</option>
+      <option value="dev">FLUX.2 [dev] — highest quality · several thousand neurons/image</option>
+      <option value="pollinations">Pollinations (FLUX) — free, no daily limit · ~1 image/15s · uses no neurons</option>
+      <option value="horde">AI Horde (Stable Diffusion) — free forever · slow queue · uses no neurons</option>
+    </select>
+    <div class="hint" style="margin-top:4px">FLUX.2 / FLUX.1 use your free Cloudflare neurons · Pollinations &amp; AI Horde are outside free services (repairs use klein 4B)</div>
     <div class="chips" id="examples"></div>
     <div class="row" style="margin-top:8px">
       <button class="main" id="go">Assemble</button>
@@ -92,16 +102,6 @@ dialog input[type=text],dialog input[type=url]{width:100%;padding:10px;backgroun
     <label for="wurl">Worker URL (required)</label>
     <input type="url" id="wurl" placeholder="https://assemblage.yourname.workers.dev">
     <div class="hint">Rendering, planning and checking all run on your Cloudflare Worker (Workers AI free allowance).</div>
-    <label for="model">Image model</label>
-    <select id="model" style="width:100%;padding:10px;background:#0f0d0b;color:var(--ink);border:1px solid var(--line);border-radius:8px;font-size:15px">
-      <option value="klein-4b">FLUX.2 [klein] 4B — best value · ~100 neurons/image (default)</option>
-      <option value="schnell">FLUX.1 [schnell] — cheapest · ~60 neurons/image · square, no edits</option>
-      <option value="klein-9b">FLUX.2 [klein] 9B — sharper · ~1,400 neurons/image</option>
-      <option value="dev">FLUX.2 [dev] — highest quality · several thousand neurons/image</option>
-      <option value="pollinations">Pollinations (FLUX) — free, no daily limit · ~1 image/15s · uses no neurons</option>
-      <option value="horde">AI Horde (Stable Diffusion) — free forever · slow queue · uses no neurons</option>
-    </select>
-    <div class="hint">The first four are Cloudflare-hosted and draw from the free 10,000 neurons/day; Pollinations and AI Horde are outside free services (repairs still use klein 4B). Each picture renders 3 variations plus repairs, so the per-picture cost is about 3–5× the figure shown.</div>
     <div class="grid2">
       <div><label for="nvar">Variations</label><input type="range" id="nvar" min="1" max="4" value="3"><span class="hint" id="nvarV">3</span></div>
       <div><label for="nrep">Repair rounds</label><input type="range" id="nrep" min="0" max="3" value="2"><span class="hint" id="nrepV">2</span></div>
@@ -689,6 +689,7 @@ $('testW').onclick=async()=>{ saveCfg(); if(!workerURL()){ toast('Enter the Work
     toast(`Vision ${ok?'works':'answered oddly'}: ${JSON.stringify(r.answers)} via ${String(r.model||'?').split('/').pop()}`, ok?'ok':'err', 12000); }
   catch(e){ toast('Vision test failed: '+e.message,'err',20000); }
 };
+$('model').value=cfg.model;
 resetSteps();
 </script>
 
