@@ -94,7 +94,7 @@ dialog input[type=text],dialog input[type=url]{width:100%;padding:10px;backgroun
     <div class="hint">With the Worker: smarter planning, vision checks and the polish pass (Cloudflare Workers AI). Without it the app still works using its built-in parser.</div>
     <div class="grid2">
       <div><label for="nvar">Variations</label><input type="range" id="nvar" min="2" max="6" value="4"><span class="hint" id="nvarV">4</span></div>
-      <div><label for="pstr">Polish strength</label><input type="range" id="pstr" min="10" max="50" value="28"><span class="hint" id="pstrV">0.28</span></div>
+      <div><label for="pstr">Polish strength</label><input type="range" id="pstr" min="10" max="50" value="35"><span class="hint" id="pstrV">0.35</span></div>
     </div>
     <label><input type="checkbox" id="useVision" checked> Vision checks (Worker)</label>
     <label><input type="checkbox" id="usePolish" checked> AI polish pass (Worker)</label>
@@ -390,7 +390,7 @@ if(typeof module!=='undefined') module.exports={parsePrompt,normalizePlan,buildC
 const $=id=>document.getElementById(id);
 const W=1024, H=683;
 const LS={get:(k,d)=>{try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v);}catch{return d;}},set:(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v));}catch{}}};
-const cfg = Object.assign({worker:'',nvar:4,pstr:0.28,useVision:true,usePolish:true,hdBg:false}, LS.get('assemblage.cfg',{}));
+const cfg = Object.assign({worker:'',nvar:4,pstr:0.35,useVision:true,usePolish:true,hdBg:false}, LS.get('assemblage.cfg',{}));
 const workerURL=()=> (cfg.worker||'').replace(/\/+$/,'');
 
 // ---------- feedback: toasts + step list (no silent failures) ----------
@@ -442,10 +442,10 @@ async function commonsSearch(q, n=24, thumbW=640){
   return pages.map(p=>{ const ii=(p.imageinfo||[])[0]||{}; const md=ii.extmetadata||{}; const strip=s=>String(s||'').replace(/<[^>]+>/g,'').trim();
     return {src:'commons',title:p.title.replace(/^File:/,''),url:ii.thumburl||ii.url,page:ii.descriptionurl,w:ii.width,h:ii.height,mime:ii.mime,license:strip(md.LicenseShortName&&md.LicenseShortName.value),author:strip(md.Artist&&md.Artist.value).slice(0,60)}; }).filter(x=>x.url);
 }
-async function openverseSearch(q, extra=''){
+async function openverseSearch(q, extra='', original=false){
   const u='https://api.openverse.org/v1/images/?page_size=20&mature=false&q='+encodeURIComponent(q)+extra;
   const j=await xfetch(u,'json');
-  return (j.results||[]).map(r=>({src:'openverse',title:r.title||q,url:r.thumbnail||r.url,page:r.foreign_landing_url,w:r.width,h:r.height,license:(r.license||'').toUpperCase()+' '+(r.license_version||''),author:(r.creator||'').slice(0,60)}));
+  return (j.results||[]).map(r=>({src:'openverse',title:r.title||q,url:original?(r.url||r.thumbnail):(r.thumbnail||r.url),page:r.foreign_landing_url,w:r.width,h:r.height,license:(r.license||'').toUpperCase()+' '+(r.license_version||''),author:(r.creator||'').slice(0,60)}));
 }
 const BAD_TITLES=/(logo|icon|map|flag|diagram|coat of arms|emblem|symbol|chart|graph|clip.?art|cartoon|illustration|vector|drawing|sketch|font|text|seal|badge|sign|stamp|svg|pictogram|emoji|silhouette|outline|line art|comic)/i;
 
@@ -498,28 +498,61 @@ function alphaCutout(bmp, bbox){
 function libGet(term){ return (LS.get('assemblage.lib',{})[term]||[]).sort((a,b)=>b.wins-a.wins); }
 function libWin(term,cand){ const lib=LS.get('assemblage.lib',{}); const arr=lib[term]||[]; const e=arr.find(x=>x.url===cand.url); if(e) e.wins++; else arr.push({url:cand.url,title:cand.title,page:cand.page,license:cand.license,author:cand.author,src:cand.src,wins:1}); lib[term]=arr.slice(-12); LS.set('assemblage.lib',lib); }
 
+async function pool(items, n, fn){ const out=new Array(items.length); let k=0; await Promise.all(Array.from({length:Math.min(n,items.length)},async()=>{ while(k<items.length){ const i=k++; try{ out[i]=await fn(items[i],i); }catch(e){ out[i]=null; } } })); return out; }
+async function gatherCandidates(term){
+  const q='"'+term+'"';
+  const jobs=[
+    commonsSearch('intitle:'+q+' filemime:png',30,400),
+    openverseSearch(term,'&extension=png',true),
+    commonsSearch(term+' filemime:png',20,400),
+    commonsSearch('intitle:'+q+' (isolated OR "white background") filemime:jpeg',12,400),
+  ];
+  const res=await Promise.allSettled(jobs); const seen=new Set(); const all=[];
+  res.forEach(r=>{ if(r.status==='fulfilled') r.value.forEach(c=>{ if(!seen.has(c.url)){ seen.add(c.url); all.push(c); } }); });
+  if(res.every(r=>r.status==='rejected')) throw new Error('photo searches unreachable');
+  const words=term.toLowerCase().split(/\s+/);
+  all.forEach(c=>{ const t=(c.title||'').toLowerCase(); c.titleHit=words.every(w=>t.includes(w)||t.includes(singular(w))); });
+  return all.filter(c=>!BAD_TITLES.test(c.title||'')).sort((a,b)=>(b.titleHit-a.titleHit));
+}
+async function screen(c){
+  const bmp=await loadBitmap(c.url); const a=analyzeCutout(bmp); let cut=null, mode=a.mode, q=a.score;
+  if(a.mode==='alpha' && a.score>0.1) cut=alphaCutout(bmp,a.bbox);
+  else if(a.mode==='flood') cut=floodCutout(bmp,a.bg,a.sd);
+  if(!cut||cut.width<12||cut.height<12) return null;
+  if(a.mode==='alpha' && a.score<=0.3) mode='alpha-graphic';
+  return {...c, canvas:cut, quality:q+(c.titleHit?0.25:0)+(c.wins?0.5:0), mode};
+}
+// One picture of all candidates, numbered, so a vision model can say which really show the object.
+function contactSheet(cands){
+  const cols=4, cell=192, rows=Math.ceil(cands.length/cols); const c=mk(cols*cell,rows*cell), x=c.getContext('2d');
+  x.fillStyle='#fff'; x.fillRect(0,0,c.width,c.height);
+  cands.forEach((cd,i)=>{ const cx=(i%cols)*cell, cy=Math.floor(i/cols)*cell; x.fillStyle='#d9d9d9'; x.fillRect(cx+3,cy+3,cell-6,cell-6);
+    const s=Math.min((cell-16)/cd.canvas.width,(cell-16)/cd.canvas.height); const w=cd.canvas.width*s, h=cd.canvas.height*s; x.drawImage(cd.canvas,cx+(cell-w)/2,cy+(cell-h)/2,w,h);
+    x.fillStyle='#000'; x.fillRect(cx+3,cy+3,34,30); x.fillStyle='#fff'; x.font='bold 24px sans-serif'; x.fillText(String(i+1),cx+9,cy+27); });
+  return c.toDataURL('image/jpeg',0.85);
+}
 async function findCutouts(o, want=3){
-  const term=o.search||o.name; const found=[], backups=[]; const seen=new Set();
-  const tryList=async(list,label)=>{
-    for(const c of list){
-      if(found.length>=want) return; if(seen.has(c.url)) continue; seen.add(c.url);
-      if(c.title && BAD_TITLES.test(c.title) && !c.wins) continue;
-      try{
-        const bmp=await loadBitmap(c.url); const a=analyzeCutout(bmp); let cut=null;
-        if(a.mode==='alpha' && a.score>0.3) cut=alphaCutout(bmp,a.bbox);
-        else if(a.mode==='alpha' && a.score>0.1 && backups.length<2){ const b=alphaCutout(bmp,a.bbox); if(b) backups.push({...c,canvas:b,quality:a.score,mode:'alpha-graphic'}); }
-        else if(a.mode==='flood') cut=floodCutout(bmp,a.bg,a.sd);
-        if(cut && cut.width>12 && cut.height>12){ found.push({...c, canvas:cut, quality:a.score+(c.wins?0.5:0), mode:a.mode}); }
-      }catch(e){ /* unreachable image: skip quietly, counted below */ }
-    }
-  };
-  const lib=libGet(term); if(lib.length) await tryList(lib,'library');
-  try{ await tryList(await commonsSearch(term+' filemime:png'),'commons png'); }catch(e){ toast('Commons search failed for "'+term+'": '+e.message,'err'); }
-  if(found.length<want){ try{ await tryList(await commonsSearch(term+' isolated white background filemime:jpeg',16),'commons isolated'); }catch{} }
-  if(found.length<want){ try{ await tryList(await openverseSearch(term+' isolated white background'),'openverse'); }catch(e){ toast('Openverse unavailable ('+e.message+')',''); } }
-  if(!found.length && backups.length){ toast('Only illustration-style cutouts found for "'+term+'" — using the best one.'); return backups; }
-  found.sort((a,b)=>b.quality-a.quality);
-  return found;
+  const term=o.search||o.name;
+  let list=[];
+  try{ list=await gatherCandidates(term); }catch(e){ toast('Photo search failed for "'+term+'": '+e.message,'err'); }
+  const lib=libGet(term).map(c=>({...c,titleHit:true}));
+  list=[...lib, ...list.filter(c=>!lib.some(l=>l.url===c.url))].slice(0,28);
+  const screened=(await pool(list,6,screen)).filter(Boolean);
+  // photographs first, graphics last; keep at most 12 for the contact sheet
+  screened.sort((a,b)=>((b.mode!=='alpha-graphic')-(a.mode!=='alpha-graphic')) || (b.quality-a.quality));
+  let cands=screened.slice(0,12);
+  if(!cands.length) return [];
+  if(workerURL() && cfg.useVision){
+    try{
+      const r=await workerPost('/pick',{image:contactSheet(cands),term,n:cands.length});
+      const good=(r.good||[]).map(n=>cands[n-1]).filter(Boolean);
+      if(good.length){ good.forEach(g=>g.verified=true); good.forEach(g=>g.quality+=1); return good.slice(0,want); }
+      toast('None of the '+cands.length+' photos found for "'+term+'" actually showed one. Using the closest match — try a different word.','err',7000);
+      cands.forEach(c=>c.quality-=1);
+    }catch(e){ toast('Photo check skipped for "'+term+'": '+e.message,'err'); }
+  }
+  if(cands[0].mode==='alpha-graphic') toast('Only illustration-style cutouts found for "'+term+'".');
+  return cands.slice(0,want);
 }
 
 // ---------- Backgrounds: Poly Haven HDRIs (360° photos that also tell us where the light is) ----------
@@ -765,14 +798,14 @@ async function scoreVariant(plan, checklist, v, useVision){
 
 // ---------- Polish: one light img2img pass, then keep the photo's detail and protect the prompt's key objects ----------
 async function polishVariant(plan, prompt, v){
-  const sw=576, sh=384; const t=mk(sw,sh); t.getContext('2d').drawImage(v.canvas,0,0,sw,sh);
-  const blob=await workerPost('/polish',{image:t.toDataURL('image/png'),prompt,strength:cfg.pstr},'blob');
+  const sw=504, sh=336; const t=mk(sw,sh); t.getContext('2d').drawImage(v.canvas,0,0,sw,sh);
+  const blob=await workerPost('/polish',{image:t.toDataURL('image/jpeg',0.9),prompt},'blob');
   const bmp=await createImageBitmap(blob);
   const up=mk(W,H), ux=ctx2(up); ux.imageSmoothingQuality='high'; ux.drawImage(bmp,0,0,W,H);
-  const blur=mk(W,H), bx=ctx2(blur); bx.filter='blur(2.2px)'; bx.drawImage(v.canvas,0,0); bx.filter='none';
+  const blur=mk(W,H), bx=ctx2(blur); bx.filter='blur(2px)'; bx.drawImage(v.canvas,0,0); bx.filter='none';
   const P=ux.getImageData(0,0,W,H), O=ctx2(v.canvas).getImageData(0,0,W,H).data, B=bx.getImageData(0,0,W,H).data, M=ctx2(v.mask).getImageData(0,0,W,H).data;
-  const pd=P.data; const protectAll = plan.objects.some(o=>o.color||o.material) ? 0.55 : 0.35;
-  for(let i=0;i<pd.length;i+=4){ const m=M[i+3]/255*protectAll; for(let k=0;k<3;k++){ const detail=O[i+k]-B[i+k]; let val=pd[i+k]+detail*0.85; val=val*(1-m)+O[i+k]*m; pd[i+k]=clamp(val,0,255); } }
+  const pd=P.data; const mix=clamp(cfg.pstr*2,0.15,1); const protect = plan.objects.some(o=>o.color||o.material) ? 0.5 : 0.25;
+  for(let i=0;i<pd.length;i+=4){ const m=M[i+3]/255*protect; for(let k=0;k<3;k++){ const detail=O[i+k]-B[i+k]; let val=pd[i+k]+detail*0.4; val=O[i+k]*(1-mix)+val*mix; val=val*(1-m)+O[i+k]*m; pd[i+k]=clamp(val,0,255); } }
   const out=mk(W,H); out.getContext('2d').putImageData(P,0,0);
   return out;
 }
@@ -817,7 +850,7 @@ async function run(){
     const cutP=Promise.all(plan.objects.map(o=>findCutouts(o,3).catch(e=>{ toast('Search failed for '+o.name+': '+e.message,'err'); return []; })));
     const [bg, cands]=await Promise.all([bgP,cutP]);
     const missing=plan.objects.filter((o,g)=>!cands[g].length).map(o=>o.name);
-    step(2, missing.length===plan.objects.length?'fail':'done', missing.length? 'none found for: '+missing.join(', ') : cands.map((c,g)=>plan.objects[g].name+'×'+c.length).join(', '));
+    step(2, missing.length===plan.objects.length?'fail':'done', missing.length? 'none found for: '+missing.join(', ') : cands.map((c,g)=>plan.objects[g].name+' ×'+c.length+(c[0]&&c[0].verified?' ✓checked':'')).join(', '));
     if(missing.length) toast('No usable photo cutouts found for: '+missing.join(', ')+'. Try a more common word for it.','err',7000);
     if(missing.length===plan.objects.length) throw new Error('Nothing to assemble yet.');
     cands.forEach(list=>list.forEach(c=>credit(c.url,c)));
