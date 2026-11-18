@@ -82,7 +82,7 @@ dialog input[type=text],dialog input[type=url]{width:100%;padding:10px;backgroun
   <div class="card">
     <details><summary>Scene plan, layout guide &amp; prompt</summary><canvas id="guideView" width="504" height="336" style="width:100%;border-radius:8px;margin-top:8px"></canvas><pre id="promptView">–</pre><pre id="planView">–</pre></details>
   </div>
-  <div class="card credits" id="credits">Rendered with FLUX.2 (model chosen in ⚙︎) and checked with a vision model, both on Cloudflare Workers AI through your Worker.</div>
+  <div class="card credits" id="credits">Rendered with the model chosen in ⚙︎ (Cloudflare Workers AI, Pollinations or AI Horde) and checked with a vision model, both on Cloudflare Workers AI through your Worker.</div>
 </main>
 <div id="toasts"></div>
 
@@ -98,12 +98,19 @@ dialog input[type=text],dialog input[type=url]{width:100%;padding:10px;backgroun
       <option value="schnell">FLUX.1 [schnell] — cheapest · ~60 neurons/image · square, no edits</option>
       <option value="klein-9b">FLUX.2 [klein] 9B — sharper · ~1,400 neurons/image</option>
       <option value="dev">FLUX.2 [dev] — highest quality · several thousand neurons/image</option>
+      <option value="pollinations">Pollinations (FLUX) — free, no daily limit · ~1 image/15s · uses no neurons</option>
+      <option value="horde">AI Horde (Stable Diffusion) — free forever · slow queue · uses no neurons</option>
     </select>
-    <div class="hint">All are Cloudflare-hosted and draw from the free 10,000 neurons/day. Each picture renders 3 variations plus repairs, so the per-picture cost is about 3–5× the figure shown.</div>
+    <div class="hint">The first four are Cloudflare-hosted and draw from the free 10,000 neurons/day; Pollinations and AI Horde are outside free services (repairs still use klein 4B). Each picture renders 3 variations plus repairs, so the per-picture cost is about 3–5× the figure shown.</div>
     <div class="grid2">
       <div><label for="nvar">Variations</label><input type="range" id="nvar" min="1" max="4" value="3"><span class="hint" id="nvarV">3</span></div>
       <div><label for="nrep">Repair rounds</label><input type="range" id="nrep" min="0" max="3" value="2"><span class="hint" id="nrepV">2</span></div>
     </div>
+    <div class="grid2">
+      <div><label for="polToken">Pollinations token (optional)</label><input type="text" id="polToken" placeholder="free at auth.pollinations.ai"></div>
+      <div><label for="hordeKey">AI Horde key (optional)</label><input type="text" id="hordeKey" placeholder="free at aihorde.net/register"></div>
+    </div>
+    <div class="hint">Both work without these. A free token gives faster turns and no watermark; a free Horde key gives better queue priority.</div>
     <label><input type="checkbox" id="useGuide"> Use the layout guide image (experimental: can leave coloured blobs)</label>
     <label><input type="checkbox" id="useVision" checked> Check results with vision</label>
     <div class="row" style="margin-top:12px"><button class="sec" id="testW" type="button">Test Worker</button><span style="flex:1"></span><button class="sec" value="close">Done</button></div>
@@ -458,7 +465,7 @@ const $=id=>document.getElementById(id);
 const W=1024, H=688;           // render size (multiple of 16)
 const GW=504, GH=336;          // guide / edit input size (< 512x512 required by FLUX.2 klein)
 const LS={get:(k,d)=>{try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v);}catch{return d;}},set:(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v));}catch{}}};
-const cfg = Object.assign({worker:'',nvar:3,nrep:2,useGuide:false,useVision:true,model:'klein-4b'}, LS.get('assemblage.cfg',{}));
+const cfg = Object.assign({worker:'',nvar:3,nrep:2,useGuide:false,useVision:true,model:'klein-4b',polToken:'',hordeKey:''}, LS.get('assemblage.cfg',{}));
 if(cfg.model==='max') cfg.model='klein-4b';
 if(!LS.get('assemblage.v4',false)){ cfg.useGuide=false; LS.set('assemblage.v4',true); LS.set('assemblage.cfg',cfg); }
 if(cfg.nvar>4) cfg.nvar=3;
@@ -501,10 +508,60 @@ function drawGuide(plan, L, scene){
 }
 
 // ---------- Rendering and checking ----------
+// ---- Free outside services (run from the browser; they use none of your Cloudflare neurons) ----
+const EXTERNAL={pollinations:1, horde:1};
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+let pollNext=0; // Pollinations anonymous tier: about one request every 15 s
+async function renderPollinations(prompt, seed){
+  const gap = cfg.polToken ? 3000 : 16000;
+  const wait = Math.max(0, pollNext - Date.now()); pollNext = Math.max(Date.now(), pollNext) + gap;
+  if(wait>0){ step(2,'run','Pollinations rate limit — waiting '+Math.ceil(wait/1000)+'s'); await sleep(wait); }
+  const q=new URLSearchParams({width:String(W),height:String(H),seed:String(seed>>>0),model:'flux',nologo:'true',safe:'false',private:'true',referrer:'swowanders.github.io'});
+  if(cfg.polToken) q.set('token',cfg.polToken);
+  const url='https://image.pollinations.ai/prompt/'+encodeURIComponent(prompt.slice(0,1500))+'?'+q;
+  for(let attempt=0; attempt<3; attempt++){
+    const r=await fetch(url);
+    if(r.status===429){ step(2,'run','Pollinations busy — retrying in 20s'); await sleep(20000); continue; }
+    if(!r.ok) throw new Error('Pollinations HTTP '+r.status);
+    const blob=await r.blob(); if(!/^image\//.test(blob.type)) throw new Error('Pollinations returned '+(blob.type||'no image'));
+    return blob;
+  }
+  throw new Error('Pollinations is rate-limiting — try fewer variations or add a free token in ⚙︎');
+}
+async function renderHorde(prompt, seed){
+  const H_API='https://aihorde.net/api/v2', hdr={'Content-Type':'application/json','apikey':cfg.hordeKey||'0000000000','Client-Agent':'Assemblage:1.0:swowanders.github.io'};
+  // anonymous users get the lowest priority, so keep the job small (multiples of 64)
+  const body={prompt:prompt.slice(0,1000)+' ### cartoon, illustration, drawing, text, watermark, deformed',
+    params:{width:768,height:512,steps:25,cfg_scale:7,sampler_name:'k_euler_a',seed:String(seed>>>0),n:1},
+    nsfw:true, censor_nsfw:false, trusted_workers:false, slow_workers:true, r2:true};
+  const sub=await fetch(H_API+'/generate/async',{method:'POST',headers:hdr,body:JSON.stringify(body)});
+  const sj=await sub.json().catch(()=>({}));
+  if(!sub.ok||!sj.id) throw new Error('AI Horde: '+(sj.message||('HTTP '+sub.status)));
+  const t0=Date.now();
+  while(true){
+    await sleep(5000);
+    if(Date.now()-t0>6*60000) throw new Error('AI Horde queue took longer than 6 minutes — try again later');
+    const c=await (await fetch(H_API+'/generate/check/'+sj.id,{headers:{'Client-Agent':hdr['Client-Agent']}})).json();
+    if(c.faulted) throw new Error('AI Horde job failed');
+    if(c.is_possible===false) throw new Error('No AI Horde worker can take this job right now');
+    if(c.done) break;
+    step(2,'run','AI Horde queue'+(c.queue_position?' position '+c.queue_position:'')+(c.wait_time?' · ~'+c.wait_time+'s':''));
+  }
+  const st=await (await fetch(H_API+'/generate/status/'+sj.id,{headers:{'Client-Agent':hdr['Client-Agent']}})).json();
+  const g=(st.generations||[])[0]; if(!g||!g.img) throw new Error('AI Horde returned no image');
+  if(g.censored) throw new Error('AI Horde worker withheld this image');
+  if(/^https?:/.test(g.img)){ const r=await fetch(g.img); if(!r.ok) throw new Error('AI Horde image download '+r.status); return await r.blob(); }
+  return await (await fetch('data:image/webp;base64,'+g.img)).blob();
+}
 async function render(prompt, seed, guideURL, editURL){
-  const t0=performance.now();
-  const model = (editURL||guideURL) && cfg.model==='schnell' ? 'klein-4b' : cfg.model; // schnell can't take an input image
-  const blob=await workerPost('/render',{prompt,seed,w:W,h:H,model,guide:editURL?undefined:guideURL,image:editURL},'blob');
+  const t0=performance.now(); let blob;
+  if(EXTERNAL[cfg.model] && !editURL){
+    blob = cfg.model==='pollinations' ? await renderPollinations(prompt,seed) : await renderHorde(prompt,seed);
+  } else {
+    // edits (repairs) need an image-editing model; outside services and schnell can't, so klein 4B does them
+    const model = (EXTERNAL[cfg.model] || ((editURL||guideURL) && cfg.model==='schnell')) ? 'klein-4b' : cfg.model;
+    blob=await workerPost('/render',{prompt,seed,w:W,h:H,model,guide:editURL?undefined:guideURL,image:editURL},'blob');
+  }
   const bmp=await createImageBitmap(blob);
   return {bmp, blob, ms:performance.now()-t0};
 }
@@ -566,7 +623,7 @@ async function run(){
     step(1,'done',L.inst.length+' objects placed');
     // 3 render variations in parallel: guided ones keep the layout, a text-only one is a safety net
     step(2,'run');
-    const jobs=[]; for(let i=0;i<cfg.nvar;i++){ const guided=cfg.useGuide && !(cfg.nvar>=3 && i===cfg.nvar-1); jobs.push({guided,seed:(Math.random()*2**31)|0,label:guided?'layout-guided':'text only'}); }
+    const jobs=[]; for(let i=0;i<cfg.nvar;i++){ const guided=cfg.useGuide && !EXTERNAL[cfg.model] && !(cfg.nvar>=3 && i===cfg.nvar-1); jobs.push({guided,seed:(Math.random()*2**31)|0,label:guided?'layout-guided':'text only'}); }
     let done=0;
     const res=await Promise.allSettled(jobs.map(j=>render(j.guided?pGuided:pText,j.seed,j.guided?guideURL:null).then(r=>{ done++; step(2,'run',done+'/'+jobs.length); const v={...j,...r}; if(!current||done===1) showVariant(v); return v; })));
     const variants=res.filter(r=>r.status==='fulfilled').map(r=>r.value);
@@ -574,7 +631,7 @@ async function run(){
     if(!variants.length && fail && fail.reason && fail.reason.status===429) throw new Error(fail.reason.message);
     if(!variants.length) throw new Error('Rendering failed: '+(fail&&fail.reason&&fail.reason.message)+(cfg.model!=='klein-4b'?' — this model may not be available on your plan; switch to FLUX.2 [klein] 4B in ⚙︎.':''));
     if(fail) toast(res.filter(r=>r.status==='rejected').length+' variation(s) failed: '+fail.reason.message,'err');
-    step(2,'done',$('model').selectedOptions[0].text.split(' —')[0]+' · '+variants.length+' images · '+(variants.reduce((a,v)=>a+v.ms,0)/variants.length/1000).toFixed(1)+'s each');
+    step(2,'done',(([...$('model').options].find(o=>o.value===cfg.model)||{text:cfg.model}).text.split(' —')[0])+' · '+variants.length+' images · '+(variants.reduce((a,v)=>a+v.ms,0)/variants.length/1000).toFixed(1)+'s each');
     // 4 check
     step(3,'run');
     await Promise.all(variants.map(v=>score(plan,checklist,v)));
@@ -614,9 +671,9 @@ $('examples').onclick=e=>{ if(e.target.classList.contains('chip')) $('prompt').v
 $('go').onclick=run;
 $('prompt').addEventListener('keydown',e=>{ if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)) run(); });
 $('dl').onclick=()=>{ if(!current) return; const a=document.createElement('a'); a.href=URL.createObjectURL(current.blob); a.download='assemblage-'+Date.now()+'.jpg'; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),4000); toast('Saved.','ok'); };
-function syncCfg(){ $('model').value=cfg.model; $('wurl').value=cfg.worker; $('nvar').value=cfg.nvar; $('nvarV').textContent=cfg.nvar; $('nrep').value=cfg.nrep; $('nrepV').textContent=cfg.nrep; $('useGuide').checked=cfg.useGuide; $('useVision').checked=cfg.useVision; }
-function saveCfg(){ cfg.model=$('model').value; cfg.worker=$('wurl').value.trim(); cfg.nvar=+$('nvar').value; cfg.nrep=+$('nrep').value; cfg.useGuide=$('useGuide').checked; cfg.useVision=$('useVision').checked; LS.set('assemblage.cfg',cfg); $('nvarV').textContent=cfg.nvar; $('nrepV').textContent=cfg.nrep; }
-['wurl','nvar','nrep','useGuide','useVision','model'].forEach(id=>$(id).addEventListener('input',saveCfg));
+function syncCfg(){ $('polToken').value=cfg.polToken; $('hordeKey').value=cfg.hordeKey; $('model').value=cfg.model; $('wurl').value=cfg.worker; $('nvar').value=cfg.nvar; $('nvarV').textContent=cfg.nvar; $('nrep').value=cfg.nrep; $('nrepV').textContent=cfg.nrep; $('useGuide').checked=cfg.useGuide; $('useVision').checked=cfg.useVision; }
+function saveCfg(){ cfg.polToken=$('polToken').value.trim(); cfg.hordeKey=$('hordeKey').value.trim(); cfg.model=$('model').value; cfg.worker=$('wurl').value.trim(); cfg.nvar=+$('nvar').value; cfg.nrep=+$('nrep').value; cfg.useGuide=$('useGuide').checked; cfg.useVision=$('useVision').checked; LS.set('assemblage.cfg',cfg); $('nvarV').textContent=cfg.nvar; $('nrepV').textContent=cfg.nrep; }
+['wurl','nvar','nrep','useGuide','useVision','model','polToken','hordeKey'].forEach(id=>$(id).addEventListener('input',saveCfg));
 $('gearBtn').onclick=()=>{ syncCfg(); $('settings').showModal(); };
 $('settings').addEventListener('close',()=>{ saveCfg(); toast(workerURL()?'Settings saved.':'Settings saved — add the Worker URL to render.'); });
 $('testW').onclick=async()=>{ saveCfg(); if(!workerURL()){ toast('Enter the Worker URL first.','err'); return; }
